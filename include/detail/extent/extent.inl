@@ -20,47 +20,45 @@ namespace aclco {
 template <int32_t BucketSize, typename SizeType, std::size_t N>
 [[nodiscard]] auto constexpr MakeValidExtent(Extent<SizeType, N> ext)
 {
-  auto constexpr stride    = BucketSize;
-  auto constexpr maxPrime = primes.back();
-  auto constexpr maxValue =
-    (static_cast<uint64_t>(std::numeric_limits<SizeType>::max()) < maxPrime)
-      ? std::numeric_limits<SizeType>::max()
-      : static_cast<SizeType>(maxPrime);
-  auto const size = IntDivCeil(
-    std::max(static_cast<SizeType>(ext), static_cast<SizeType>(1)), stride);
+    auto constexpr stride = BucketSize;
+    auto constexpr maxPrime = primes.back();
+    auto constexpr maxValue = (static_cast<uint64_t>(std::numeric_limits<SizeType>::max()) < maxPrime) ?
+                                  std::numeric_limits<SizeType>::max() :
+                                  static_cast<SizeType>(maxPrime);
+    auto const size = IntDivCeil(std::max(static_cast<SizeType>(ext), static_cast<SizeType>(1)), stride);
 
-  if (size > maxValue) {
-    throw std:: invalid_argument("Invalid input Extent");
-  }
+    if (size > maxValue) {
+        throw std::invalid_argument("Invalid input Extent");
+    }
 
-  if constexpr (N == dynamicExtent) {
-    return Extent<SizeType, dynamicExtent>{static_cast<SizeType>(
-      *LowerBound(
-        primes.begin(), primes.end(), static_cast<uint64_t>(size)) * stride)
-      };
-  } else {
-    return Extent<SizeType, static_cast<std::size_t>(*LowerBound(primes.begin(),
-                                                     primes.end(),
-                                                     static_cast<uint64_t>(size)) * stride)>{};
-  }
+    if constexpr (N == dynamicExtent) {
+        return Extent<SizeType, dynamicExtent>{
+            static_cast<SizeType>(*LowerBound(primes.begin(), primes.end(), static_cast<uint64_t>(size)) * stride)};
+    } else {
+        return Extent<SizeType, static_cast<std::size_t>(
+                                    *LowerBound(primes.begin(), primes.end(), static_cast<uint64_t>(size)) * stride)>{};
+    }
 }
 
 template <typename ProbingScheme, typename Storage, typename SizeType, std::size_t N>
 [[nodiscard]] auto constexpr MakeValidExtent(Extent<SizeType, N> ext)
 {
-  if constexpr (aclco::IsDoubleHashing<ProbingScheme>::value) {
-    return MakeValidExtent<Storage::bucketSize, SizeType, N>(ext);
-  }
+    if constexpr (aclco::IsDoubleHashing<ProbingScheme>::value) {
+        return MakeValidExtent<Storage::bucketSize, SizeType, N>(ext);
+    } else {
+        auto constexpr stride = Storage::bucketSize; // 后续新增线程组功能时需要扩展
 
-  auto constexpr stride = Storage::bucketSize; // 后续新增线程组功能时需要扩展
-
-  if constexpr (N == dynamicExtent) {
-    auto const size = IntDivCeil(std::max(static_cast<SizeType>(ext), static_cast<SizeType>(1)), stride) + static_cast<SizeType>(ext == 0);
-    return Extent<SizeType, dynamicExtent>(size * stride);
-  } else {
-    auto constexpr size = IntDivCeil(Max<SizeType, static_cast<SizeType>(ext), static_cast<SizeType>(1)>(), stride) + static_cast<SizeType>(ext == 0);
-    return Extent<SizeType, size * stride>();
-  }
+        if constexpr (N == dynamicExtent) {
+            auto const size = IntDivCeil(std::max(static_cast<SizeType>(ext), static_cast<SizeType>(1)), stride) +
+                              static_cast<SizeType>(ext == 0);
+            return Extent<SizeType, dynamicExtent>(size * stride);
+        } else {
+            auto constexpr size = IntDivCeil(Max<SizeType, static_cast<SizeType>(ext), static_cast<SizeType>(1)>(),
+                                             stride) +
+                                  static_cast<SizeType>(ext == 0);
+            return Extent<SizeType, size * stride>();
+        }
+    }
 }
 
-}
+} // namespace aclco
