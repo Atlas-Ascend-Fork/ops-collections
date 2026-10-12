@@ -378,7 +378,8 @@ function run_performance_test() {
   echo "[INFO] 找到 ${#bins[@]} 个性能测试文件"
   for b in "${bins[@]}"; do
     if [ ! -x "${b}" ]; then
-      continue
+      echo "ERROR: performance test binary is not executable: ${b}" >&2
+      return 1
     fi
     local test_name="${b#${perf_bin_dir}/}"
     echo "==> RUN: ${test_name}"
@@ -429,6 +430,9 @@ function run_tests() {
 
   for b in "${bins[@]}"; do
     if [ ! -x "${b}" ]; then
+      echo "==> FAIL: $(basename "${b}") (not executable)"
+      failed=$((failed + 1))
+      failed_names+=("$(basename "${b}")")
       continue
     fi
 
