@@ -19,40 +19,40 @@ namespace detail {
 template <typename T>
 COLLECTION_SIMT_DEVICE T AtomicCas2Byte(__gm__ T* addr, T expected, T desired)
 {
-  using WideType = uint32_t;
-  uintptr_t addrVal = reinterpret_cast<uintptr_t>(addr);
-  uintptr_t alignedAddrVal = addrVal & ~3ull;
-  __gm__ WideType* alignedAddr = reinterpret_cast<__gm__ WideType*>(alignedAddrVal);
-  int shift = static_cast<int>((addrVal & 2ull) * 8); // 0 or 16
+    using WideType = uint32_t;
+    uintptr_t addrVal = reinterpret_cast<uintptr_t>(addr);
+    uintptr_t alignedAddrVal = addrVal & ~3ull;
+    __gm__ WideType* alignedAddr = reinterpret_cast<__gm__ WideType*>(alignedAddrVal);
+    int shift = static_cast<int>((addrVal & 2ull) * 8); // 0 or 16
 
-  while (true) {
-    WideType currentWide = *alignedAddr;
-    T currentNarrow = static_cast<T>(currentWide >> shift);
+    while (true) {
+        WideType currentWide = *alignedAddr;
+        T currentNarrow = static_cast<T>(currentWide >> shift);
 
-    if (currentNarrow != expected) {
-      return currentNarrow;
+        if (currentNarrow != expected) {
+            return currentNarrow;
+        }
+
+        WideType mask = static_cast<WideType>(0xFFFFu) << shift;
+        WideType desiredWide = (currentWide & ~mask) | ((static_cast<WideType>(desired) & 0xFFFFu) << shift);
+        WideType oldWide = AscendC::Simt::AtomicCas(alignedAddr, currentWide, desiredWide);
+
+        if (oldWide == currentWide) {
+            return expected;
+        }
     }
-
-    WideType mask = static_cast<WideType>(0xFFFFu) << shift;
-    WideType desiredWide = (currentWide & ~mask) | (static_cast<WideType>(desired) << shift);
-    WideType oldWide = AscendC::Simt::AtomicCas(alignedAddr, currentWide, desiredWide);
-
-    if (oldWide == currentWide) {
-      return expected;
-    }
-  }
 }
 
-}
+} // namespace detail
 
 template <typename T>
 COLLECTION_SIMT_DEVICE T AtomicCasWrap(__gm__ T* addr, T expected, T desired)
 {
-  if constexpr (sizeof(T) == 2) {
-    return detail::AtomicCas2Byte(addr, expected, desired);
-  } else {
-    return AscendC::Simt::AtomicCas(addr, expected, desired);
-  }
+    if constexpr (sizeof(T) == 2) {
+        return detail::AtomicCas2Byte(addr, expected, desired);
+    } else {
+        return AscendC::Simt::AtomicCas(addr, expected, desired);
+    }
 }
 
-}
+} // namespace aclco
