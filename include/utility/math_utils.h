@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <iterator>
 #include <type_traits>
 
 #include "macros.h"
