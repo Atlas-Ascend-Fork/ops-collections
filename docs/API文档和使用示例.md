@@ -69,11 +69,11 @@ constexpr StaticMap(Extent capacity,
                     aclrtStream stream = nullptr);
 
 // StaticSet
-constexpr StaticSet(Extent capacity, 
+constexpr StaticSet(Extent capacity,
                     Key emptyKey,
-                    KeyEqual const& pred = {}, 
+                    KeyEqual const& pred = {},
                     ProbingScheme const& probingScheme = {},
-                    Storage storage = {}, 
+                    Storage storage = {},
                     aclrtStream stream = nullptr);
 ```
 
@@ -193,13 +193,13 @@ aclco::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
 devicePairs.CopyFromHostAsync(hostPairs.data(), insertCount, stream);
 
 // 同步插入操作
-auto failedCount = map.Insert(static_cast<void*>(devicePairs.Data()), 
+auto failedCount = map.Insert(static_cast<void*>(devicePairs.Data()),
                               aclco::Extent<size_t>(insertCount), stream);
 // 输出插入失败个数
 std::cout << "Insert failed count: " << failedCount << std::endl;
 
 // 异步插入操作
-map.InsertAsync(static_cast<void*>(devicePairs.Data()), 
+map.InsertAsync(static_cast<void*>(devicePairs.Data()),
                aclco::Extent<size_t>(insertCount), stream);
 aclrtSynchronizeStream(stream);
 ```
@@ -217,14 +217,14 @@ aclco::DeviceBuffer<SetKey> deviceKeys(insertCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), insertCount, stream);
 
 // 同步插入操作
-auto failedCount = set.Insert(static_cast<void*>(deviceKeys.Data()), 
+auto failedCount = set.Insert(static_cast<void*>(deviceKeys.Data()),
                               aclco::Extent<size_t>(insertCount), stream);
-                              
-// 输出插入失败个数                             
+
+// 输出插入失败个数
 std::cout << "Insert failed count: " << failedCount << std::endl;
 
 // 异步插入操作
-set.InsertAsync(static_cast<void*>(deviceKeys.Data()), 
+set.InsertAsync(static_cast<void*>(deviceKeys.Data()),
                aclco::Extent<size_t>(insertCount), stream);
 aclrtSynchronizeStream(stream);
 ```
@@ -434,7 +434,7 @@ aclco::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
 devicePairs.CopyFromHostAsync(hostPairs.data(), insertCount, stream);
 
 // 先插入初始键值对
-auto failedCount = map.Insert(static_cast<void*>(devicePairs.Data()), 
+auto failedCount = map.Insert(static_cast<void*>(devicePairs.Data()),
                               aclco::Extent<size_t>(insertCount), stream);
 std::cout << "Insert failed count: " << failedCount << std::endl;
 
@@ -449,12 +449,12 @@ aclco::DeviceBuffer<aclco::Pair<Key, Value>> deviceUpdatePairs(insertCount);
 deviceUpdatePairs.CopyFromHostAsync(updatePairs.data(), insertCount, stream);
 
 // 同步插入或更新操作：键已存在则更新值，键不存在则插入
-auto updateFailedCount = map.InsertOrAssign(static_cast<void*>(deviceUpdatePairs.Data()), 
+auto updateFailedCount = map.InsertOrAssign(static_cast<void*>(deviceUpdatePairs.Data()),
                                             aclco::Extent<size_t>(insertCount), stream);
 std::cout << "InsertOrAssign failed count: " << updateFailedCount << std::endl;
 
 // 异步插入或更新操作
-map.InsertOrAssignAsync(static_cast<void*>(deviceUpdatePairs.Data()), 
+map.InsertOrAssignAsync(static_cast<void*>(deviceUpdatePairs.Data()),
                         aclco::Extent<size_t>(insertCount), stream);
 aclrtSynchronizeStream(stream);
 ```
@@ -681,8 +681,8 @@ deviceKeys.CopyFromHostAsync(hostKeys.data(), findCount, stream);
 aclco::DeviceBuffer<Value> deviceValues(findCount);
 
 // 同步查找操作
-map.Find(static_cast<void*>(deviceKeys.Data()), 
-         static_cast<void*>(deviceValues.Data()), 
+map.Find(static_cast<void*>(deviceKeys.Data()),
+         static_cast<void*>(deviceValues.Data()),
          aclco::Extent<size_t>(findCount), stream);
 
 // 将结果拷回主机
@@ -700,8 +700,8 @@ for (size_t i = 0; i < findCount; ++i) {
 }
 
 // 异步查找操作
-map.FindAsync(static_cast<void*>(deviceKeys.Data()), 
-             static_cast<void*>(deviceValues.Data()), 
+map.FindAsync(static_cast<void*>(deviceKeys.Data()),
+             static_cast<void*>(deviceValues.Data()),
              aclco::Extent<size_t>(findCount), stream);
 aclrtSynchronizeStream(stream);
 ```
@@ -722,13 +722,13 @@ deviceKeys.CopyFromHostAsync(hostKeys.data(), findCount, stream);
 aclco::DeviceBuffer<SetKey> deviceOutputKeys(findCount);
 
 // 同步查找操作
-set.Find(static_cast<void*>(deviceKeys.Data()), 
-         static_cast<void*>(deviceOutputKeys.Data()), 
+set.Find(static_cast<void*>(deviceKeys.Data()),
+         static_cast<void*>(deviceOutputKeys.Data()),
          aclco::Extent<size_t>(findCount), stream);
 
 // 异步查找操作
-set.FindAsync(static_cast<void*>(deviceKeys.Data()), 
-             static_cast<void*>(deviceOutputKeys.Data()), 
+set.FindAsync(static_cast<void*>(deviceKeys.Data()),
+             static_cast<void*>(deviceOutputKeys.Data()),
              aclco::Extent<size_t>(findCount), stream);
 aclrtSynchronizeStream(stream);
 ```
@@ -954,8 +954,8 @@ deviceKeys.CopyFromHostAsync(hostKeys.data(), checkCount, stream);
 aclco::DeviceBuffer<bool> deviceResults(checkCount);
 
 // 同步检查操作
-map.Contains(static_cast<void*>(deviceKeys.Data()), 
-            static_cast<void*>(deviceResults.Data()), 
+map.Contains(static_cast<void*>(deviceKeys.Data()),
+            static_cast<void*>(deviceResults.Data()),
             aclco::Extent<size_t>(checkCount), stream);
 
 // 将结果拷回主机
@@ -965,13 +965,13 @@ aclrtSynchronizeStream(stream);
 
 // 打印检查结果
 for (size_t i = 0; i < checkCount; ++i) {
-    std::cout << "Key: " << hostKeys[i] 
+    std::cout << "Key: " << hostKeys[i]
               << ", Exists: " << (hostResults[i] ? "Yes" : "No") << std::endl;
 }
 
 // 异步检查操作
-map.ContainsAsync(static_cast<void*>(deviceKeys.Data()), 
-                 static_cast<void*>(deviceResults.Data()), 
+map.ContainsAsync(static_cast<void*>(deviceKeys.Data()),
+                 static_cast<void*>(deviceResults.Data()),
                  aclco::Extent<size_t>(checkCount), stream);
 aclrtSynchronizeStream(stream);
 ```
@@ -1150,14 +1150,14 @@ aclco::DeviceBuffer<Key> deviceKeys(eraseCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), eraseCount, stream);
 
 // 同步删除操作
-auto failedCount = map.Erase(static_cast<void*>(deviceKeys.Data()), 
+auto failedCount = map.Erase(static_cast<void*>(deviceKeys.Data()),
                               aclco::Extent<size_t>(eraseCount), stream);
 
 // 输出删除失败个数
 std::cout << "Erase failed count: " << failedCount << std::endl;
 
 // 异步删除操作
-map.EraseAsync(static_cast<void*>(deviceKeys.Data()), 
+map.EraseAsync(static_cast<void*>(deviceKeys.Data()),
                aclco::Extent<size_t>(eraseCount), stream);
 aclrtSynchronizeStream(stream);
 ```
@@ -1402,7 +1402,7 @@ aclco::DeviceBuffer<Key> deviceKeys(countKeyNum);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), countKeyNum, stream);
 
 // 同步统计操作
-auto existCount = map.Count(static_cast<void*>(deviceKeys.Data()), 
+auto existCount = map.Count(static_cast<void*>(deviceKeys.Data()),
                             aclco::Extent<size_t>(countKeyNum), stream);
 std::cout << "Exist key count: " << existCount << std::endl;
 ```
@@ -1476,17 +1476,20 @@ auto setDataPtr = set.Data();
 **函数签名：**
 
 ```cpp
-template<typename Key, typename Value>
-Pair<Key, Value> MakePair(Key key, Value value);
+template<typename F, typename S>
+constexpr Pair<F, S> MakePair(F&& f, S&& s) noexcept;
 ```
 
 **功能说明：**
-创建键值对对象
+创建键值对对象。接口参数为转发引用；显式指定 `F`、`S` 为值类型时，需传入对应的右值。以下示例用值转换临时量构造 `Pair<uint32_t, uint32_t>`。直接省略模板参数并传入左值会推导引用类型，不能将这种结果视为相同的值类型 Pair。
 
 **使用示例：**
 
 ```cpp
-auto pair = aclco::MakePair<uint32_t, uint32_t>(key, value);
+uint32_t key = 1;
+uint32_t value = 2;
+auto pair = aclco::MakePair<uint32_t, uint32_t>(
+    static_cast<uint32_t>(key), static_cast<uint32_t>(value));
 ```
 
 ### 4.2 Extent - 容量表示
