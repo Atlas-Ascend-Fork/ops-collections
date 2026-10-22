@@ -79,9 +79,9 @@ SizeType InsertAsync(void* values, Extent valueNum, aclrtStream stream);        
 | 模式 | 适用场景 | 原理 |
 | --- | --- | --- |
 | `kExactDedup`（默认） | 通用插入：输入可能含重复 key，或对已增长（多子表）的容器重插旧 key | 容器增长出多个子表后，逐块对所有旧子表做去重扫描（提取 key → Contains 命中判定 → 仅插入未命中的元素），保证"重插已存在 key 返回 0、`Size()` 精确"。 |
-| `kAppendUnique` | 调用方保证**本批及历史所有 key 全局唯一**的大规模/多批次 bulk 插入（如分批 800k 灌入唯一键的高吞吐场景） | 跳过增长后的跨子表去重扫描，每批直接追加到单一活跃子表；采用乐观计数——先按批量大小累加 `Size()`，精确失败数延迟到 `Size()` / 慢路径 / 读控制点一次性折叠，从而消除每批的 host↔device 同步停顿。**仅当 key 确实全局唯一时计数才精确**；若误用于含重复 key 的输入，重复 key 不会被去重、`Size()` 会偏大。 |
+| `kAppendUnique` | 调用方保证**本批及历史所有 key 全局唯一**的大规模/多批次 bulk 插入（如分批 800k 灌入唯一键的高吞吐场景） | 跳过增长后的跨子表去重扫描，每批直接追加到单一活跃子表；采用乐观计数——先按批量大小累加 `Size()`，不回读实际插入失败数，`Size()` 仅返回 Host 的乐观计数，不执行同步或计数修正，从而消除每批的 host↔device 同步停顿。**仅当 key 确实全局唯一时计数才精确**；若误用于含重复 key 的输入，重复 key 不会被去重、`Size()` 会偏大。 |
 
-> `InsertAsync` 同样采用乐观计数（不逐批回读失败数），适合唯一 key 的高吞吐异步插入；精确 `Size()` 在读取时折叠。对含重复 key 或需即时精确计数的场景，请用默认的同步 `Insert`（`kExactDedup`）。
+> `InsertAsync` 同样采用乐观计数（不逐批回读失败数），适合唯一 key 的高吞吐异步插入；`Size()` 直接返回 Host 计数，不会在读取时回读失败数或修正重复输入导致的高估。对含重复 key 或需即时精确计数的场景，请用默认的同步 `Insert`（`kExactDedup`）。
 
 ### 2.3 InsertOrAssign - 插入或赋值
 
@@ -120,7 +120,7 @@ SizeType Erase(void* keys, Extent keyNum, aclrtStream stream);       // 返回�
 void     EraseAsync(void* keys, Extent keyNum, aclrtStream stream);  // 异步
 ```
 
-**功能说明：** 删除一批 key（墓碑删除，不破坏探测链）。删除不存在的 key 无副作用。须在构造时提供有效 `erasedKey`。
+**功能说明：** 同步 `Erase` 删除一批 key（墓碑删除，不破坏探测链），回读成功删除数并更新 Host 计数。删除不存在的 key 无副作用。须在构造时提供有效 `erasedKey`。`EraseAsync` 只下发设备删除，不更新 Host 计数；即使随后同步流，`Size()` 也不会自动反映该次异步删除。需要精确元素数量时使用同步 `Insert`（`kExactDedup`）和 `Erase`，避免混入未经统计的异步修改。
 
 ### 2.7 Reserve - 预留容量
 
@@ -134,7 +134,7 @@ void Reserve(SizeType n, aclrtStream stream);
 
 ```cpp
 void     Clear(aclrtStream stream);   // 清空所有元素（容量不变）
-SizeType Size() const noexcept;       // 当前元素数
+SizeType Size() const noexcept;       // Host 计数，无同步/回读；异步修改后可能不精确
 SizeType Capacity() const noexcept;   // 所有子表容量之和
 size_t   NumSubmaps() const noexcept; // 当前子表数量
 ```
