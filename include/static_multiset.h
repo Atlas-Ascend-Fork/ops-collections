@@ -546,10 +546,19 @@ private:
             detail::static_multiset::ScanKernel<false><<<1, 0, stream>>>(work_.get());
         } else {
             uint8_t* total = work_.get() + detail::static_multiset::PARTITIONS * sizeof(uint64_t);
-            Check(aclrtMemsetAsync(total, sizeof(uint64_t), 0, sizeof(uint64_t), stream), "initialize count");
+            auto blocks = QueryBlocks();
+            constexpr uint32_t WARPS_PER_BLOCK =
+                detail::static_multiset::QUERY_THREADS / 32;
+            if (blocks * WARPS_PER_BLOCK > detail::static_multiset::PARTITIONS) {
+                throw std::runtime_error("Count reduction workspace too small");
+            }
+            auto partial = work_.get();
             detail::static_multiset::CountKernel<Key>
-                <<<QueryBlocks(), 0, stream>>>(Bytes(keys), n, empty_, KeysData(), CountsData(), tableCapacity_, total,
-                                               direct_, directBase_, uniformCount_, uniformLength_);
+                <<<blocks, 0, stream>>>(Bytes(keys), n, empty_, KeysData(), CountsData(),
+                                       tableCapacity_, partial, direct_, directBase_,
+                                       uniformCount_, uniformLength_);
+            detail::static_multiset::CountFinalizeKernel<<<1, 0, stream>>>(
+                partial, total, blocks * WARPS_PER_BLOCK);
         }
         return ReadTotal(stream);
     }

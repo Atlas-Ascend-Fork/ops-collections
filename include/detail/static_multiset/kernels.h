@@ -366,8 +366,10 @@ COLLECTION_SIMT_VF LAUNCH_BOUND(QUERY_THREADS) inline void CountSimt(__gm__ Key*
     for (uint32_t delta = 16; delta > 0; delta >>= 1) {
         sum += AscendC::Simt::WarpShflDownSync(sum, delta);
     }
-    if ((AscendC::Simt::GetThreadIdx() % 32) == 0 && sum) {
-        AscendC::Simt::AtomicAdd(total, sum);
+    if ((AscendC::Simt::GetThreadIdx() % 32) == 0) {
+        auto warp = AscendC::Simt::GetBlockIdx() * (QUERY_THREADS / 32)
+                  + AscendC::Simt::GetThreadIdx() / 32;
+        total[warp] = sum;
     }
 }
 template <typename Key>
@@ -378,6 +380,34 @@ COLLECTION_AIV_GLOBAL void CountKernel(GM_ADDR keys, uint64_t n, Key empty, GM_A
     AscendC::Simt::VF_CALL<CountSimt<Key>>(AscendC::Simt::Dim3{QUERY_THREADS}, (__gm__ Key*)keys, n, empty,
                                            (__gm__ Key*)table, (__gm__ uint64_t*)counts, capacity,
                                            (__gm__ uint64_t*)total, direct, base, uniformCount, uniformLength);
+}
+
+
+COLLECTION_SIMT_VF LAUNCH_BOUND(32)
+inline void CountFinalizeSimt(__gm__ uint64_t* partial,
+                              __gm__ uint64_t* total,
+                              uint32_t warps)
+{
+    uint32_t lane = AscendC::Simt::GetThreadIdx();
+    uint64_t sum = 0;
+    for (uint32_t i = lane; i < warps; i += 32) {
+        sum += partial[i];
+    }
+    for (uint32_t delta = 16; delta > 0; delta >>= 1) {
+        sum += AscendC::Simt::WarpShflDownSync(sum, delta);
+    }
+    if (lane == 0) {
+        total[0] = sum;
+    }
+}
+
+COLLECTION_AIV_GLOBAL void CountFinalizeKernel(
+    GM_ADDR partial, GM_ADDR total, uint32_t warps)
+{
+    AscendC::Simt::VF_CALL<CountFinalizeSimt>(
+        AscendC::Simt::Dim3{32},
+        (__gm__ uint64_t*)partial,
+        (__gm__ uint64_t*)total, warps);
 }
 
 COLLECTION_SIMT_DEVICE uint64_t InclusiveWarpSum(uint64_t prefix, uint64_t lane)
