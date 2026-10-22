@@ -98,7 +98,7 @@ private:
         auto const anchor_index = this->interpolation_anchor_index(e);
         int const n = raw_estimate_data_size(this->precision_);
 
-        auto low = std::max(anchor_index - k + 1, 0);
+        auto low = std::max(std::min(anchor_index - k + 1, n - k), 0);
         auto high = std::min(low + k, n);
         // Keep moving bounds as long as the (exclusive) high bound is closer to the estimate than
         // the lower (inclusive) bound.
