@@ -134,7 +134,89 @@ void CheckDirectExport(aclco::StaticMultimap<T, T>& map, std::vector<aclco::Pair
         REQUIRE(actual[i].second == expected[i].second);
     }
 }
+
+using GenericPair = aclco::Pair<uint32_t, uint32_t>;
+
+void CheckPackedPairs(std::vector<GenericPair> actual, std::vector<GenericPair> expected)
+{
+    actual.erase(std::remove_if(actual.begin(), actual.end(),
+                                [](const GenericPair& pair) { return pair.first == 0xffffffffu; }), actual.end());
+    auto less = [](const GenericPair& a, const GenericPair& b) {
+        return a.first < b.first || (a.first == b.first && a.second < b.second);
+    };
+    std::sort(expected.begin(), expected.end(), less);
+    std::sort(actual.begin(), actual.end(), less);
+    REQUIRE(actual.size() == expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        REQUIRE(actual[i].first == expected[i].first);
+        REQUIRE(actual[i].second == expected[i].second);
+    }
+}
+
+void CheckConditionalPairPacking(Device<GenericPair>& table, Device<GenericPair>& input,
+                                  Device<uint32_t>& failed, const std::vector<GenericPair>& pairs,
+                                  aclrtStream stream)
+{
+    using namespace aclco::detail::multimap;
+    const auto capacity = pairs.size();
+    const uint32_t empty = 0xffffffffu;
+    const std::vector<uint32_t> stencil{1, 0, 1, 0, 1, 0, 1};
+    const std::vector<uint64_t> offsets{0};
+    Device<uint32_t> selection(capacity);
+    Device<uint64_t> ranks(1);
+    selection.CopyFromHostAsync(stencil.data(), capacity, stream);
+    ranks.CopyFromHostAsync(offsets.data(), 1, stream);
+    failed.MemsetZero(stream);
+    Clear<uint32_t, uint32_t><<<1, nullptr, stream>>>(table.Data(), nullptr, capacity, empty, empty);
+    Insert<uint32_t, uint32_t, uint32_t, Nonzero, true><<<1, nullptr, stream>>>(
+        table.Data(), nullptr, capacity, empty, empty, input.Data(), selection.Data(), capacity,
+        ranks.Data(), 4, 0, failed.Data());
+    REQUIRE(failed.CopyToHost(stream)[0] == 0);
+    std::vector<GenericPair> expected;
+    for (std::size_t i = 0; i < capacity; ++i) {
+        if (stencil[i]) {
+            expected.push_back(pairs[i]);
+        }
+    }
+    CheckPackedPairs(table.CopyToHost(stream), expected);
+}
 } // namespace
+
+TEST_CASE("static_multimap direct kernel packs generic eight-byte pairs",
+          "[static_multimap][direct_storage][pair_packing]")
+{
+    // The public map accepts signed types only; exercise the generic ref via its kernel.
+    using T = uint32_t;
+    using P = aclco::Pair<T, T>;
+    using namespace aclco::detail::multimap;
+    static_assert(sizeof(P) == sizeof(uint64_t));
+    aclco::test::AclGlobalGuard acl;
+    aclco::test::AclStreamGuard guard;
+    auto stream = guard.stream;
+    const std::vector<P> pairs{
+        {0u, 0x80000000u}, {0x80000000u, 0u}, {0x12345678u, 0xabcdef01u},
+        {0x12345678u, 0xfedcba98u}, {0xfffffffeu, 0xfffffffeu},
+        {42u, 0x01020304u}, {42u, 0x01020304u}};
+    const auto capacity = pairs.size();
+    const T emptyKey = 0xffffffffu;
+    const T emptyValue = 0xffffffffu;
+    Device<P> table(capacity), input(capacity);
+    Device<uint32_t> failed(1);
+    input.CopyFromHostAsync(pairs.data(), capacity, stream);
+    failed.MemsetZero(stream);
+    Clear<T, T><<<1, nullptr, stream>>>(table.Data(), nullptr, capacity, emptyKey, emptyValue);
+    Insert<T, T, uint32_t, SelectAll, false><<<1, nullptr, stream>>>(
+        table.Data(), nullptr, capacity, emptyKey, emptyValue, input.Data(), nullptr, capacity,
+        nullptr, capacity, 0, failed.Data());
+    REQUIRE(failed.CopyToHost(stream)[0] == 0);
+    CheckPackedPairs(table.CopyToHost(stream), pairs);
+    Insert<T, T, uint32_t, SelectAll, false><<<1, nullptr, stream>>>(
+        table.Data(), nullptr, capacity, emptyKey, emptyValue, input.Data(), nullptr, 1,
+        nullptr, 1, 0, failed.Data());
+    REQUIRE(failed.CopyToHost(stream)[0] == 1);
+
+    CheckConditionalPairPacking(table, input, failed, pairs, stream);
+}
 
 TEMPLATE_TEST_CASE("static_multimap direct storage covers complete public operations",
                    "[static_multimap][direct_storage]", int32_t, int64_t)

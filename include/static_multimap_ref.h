@@ -171,22 +171,35 @@ struct StaticMultimapRef {
      */
     COLLECTION_SIMT_DEVICE bool Insert(Key key, Value value) const
     {
+        uint64_t expectedBits = 0;
+        uint64_t desiredBits = 0;
+        if constexpr (sizeof(Pair<Key, Value>) == sizeof(uint64_t)) {
+            if constexpr (std::is_same_v<Key, int32_t> && std::is_same_v<Value, int32_t>) {
+                // The direct I32 pair occupies adjacent low/high 32-bit words.
+                using PairType = Pair<Key, Value>;
+                static_assert(offsetof(PairType, second) == sizeof(Key));
+                expectedBits = uint64_t(uint32_t(emptyKey)) | (uint64_t(uint32_t(emptyValue)) << 32);
+                desiredBits = uint64_t(uint32_t(key)) | (uint64_t(uint32_t(value)) << 32);
+            } else {
+                Pair<Key, Value> expected{emptyKey, emptyValue};
+                Pair<Key, Value> desired{key, value};
+                // Copy object bytes without imposing uint64_t alignment or aliasing.
+                const auto* expectedBytes = reinterpret_cast<const unsigned char*>(&expected);
+                const auto* desiredBytes = reinterpret_cast<const unsigned char*>(&desired);
+                auto* expectedBitsBytes = reinterpret_cast<unsigned char*>(&expectedBits);
+                auto* desiredBitsBytes = reinterpret_cast<unsigned char*>(&desiredBits);
+                for (std::size_t i = 0; i < sizeof(uint64_t); ++i) {
+                    expectedBitsBytes[i] = expectedBytes[i];
+                    desiredBitsBytes[i] = desiredBytes[i];
+                }
+            }
+        }
         auto slot = Start(key);
         for (std::size_t step = 0; step < capacity; ++step) {
             // Slots only transition from empty to occupied during insertion.
             // A stale empty read can only cause an extra CAS attempt.
             if (slots[slot].first == emptyKey) {
                 if constexpr (sizeof(Pair<Key, Value>) == sizeof(uint64_t)) {
-                    Pair<Key, Value> expected{emptyKey, emptyValue};
-                    Pair<Key, Value> desired{key, value};
-                    uint64_t expectedBits = 0;
-                    uint64_t desiredBits = 0;
-                    for (std::size_t byte = 0; byte < sizeof(uint64_t); ++byte) {
-                        reinterpret_cast<unsigned char*>(&expectedBits)[byte] = reinterpret_cast<unsigned char*>(
-                            &expected)[byte];
-                        reinterpret_cast<unsigned char*>(&desiredBits)[byte] = reinterpret_cast<unsigned char*>(
-                            &desired)[byte];
-                    }
                     if (AscendC::Simt::AtomicCas(reinterpret_cast<__gm__ uint64_t*>(slots + slot), expectedBits,
                                                  desiredBits) == expectedBits) {
                         return true;
