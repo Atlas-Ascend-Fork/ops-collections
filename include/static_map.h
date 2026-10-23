@@ -60,7 +60,7 @@ class StaticMap {
    * @param capacity map的容量
    * @param emptyKey 表示空键的标记值
    * @param emptyValue 表示空值的标记值
-   * @param preb 键比较器，默认为 KeyEqual()
+   * @param pred 键比较器，默认为 KeyEqual()
    * @param probingScheme 探测策略，默认为 ProbingScheme()
    * @param storage 存储策略，默认为 Storage<BucketSize>()
    * @param stream ACL流，默认为 nullptr
