@@ -213,7 +213,8 @@ public:
         return total;
     }
 
-    /** @brief 查找：对各非空子表查询，device 合并核取唯一命中（key 至多在一个子表）。 */
+    /** @brief 查找：对各非空子表查询，device 合并核取唯一命中（key 至多在一个子表）。
+     *  子表查询与合并核在同一 stream 上连续提交，循环外统一同步一次，返回时结果已就绪。 */
     void Find(void* keys, void* outputValues, Extent keyNum, aclrtStream stream)
     {
         SizeType n = static_cast<SizeType>(keyNum);
@@ -225,20 +226,25 @@ public:
             submaps_[0]->Find(keys, outputValues, n, stream);
             return;
         }
-        submaps_[base]->Find(keys, outputValues, n, stream);
-        if (!HasMoreNonEmptyAfter(base))
-            return;
-        EnsureScratch(static_cast<size_t>(n) * sizeof(T));
-        for (size_t s = base + 1; s < submaps_.size(); ++s) {
-            if (submapSize_[s] == 0)
-                continue;
-            submaps_[s]->Find(keys, dScratch_.get(), n, stream);
-            aclco::MergeFind<T><<<aivCoreNum_, 0, stream>>>((uint8_t*)outputValues, (uint8_t*)dScratch_.get(),
-                                                            (uint8_t*)dEmptyValue_.get(), static_cast<uint32_t>(n));
+        // 子表查询用 Async：同一 stream 上的顺序已保证与合并核的依赖（dScratch_ 复用、
+        // outputValues 累加合并均按 stream 顺序执行），逐表同步只会让 Host 在循环里阻塞 S 次。
+        submaps_[base]->FindAsync(keys, outputValues, n, stream);
+        if (HasMoreNonEmptyAfter(base)) {
+            EnsureScratch(static_cast<size_t>(n) * sizeof(T));
+            for (size_t s = base + 1; s < submaps_.size(); ++s) {
+                if (submapSize_[s] == 0)
+                    continue;
+                submaps_[s]->FindAsync(keys, dScratch_.get(), n, stream);
+                aclco::MergeFind<T><<<aivCoreNum_, 0, stream>>>((uint8_t*)outputValues, (uint8_t*)dScratch_.get(),
+                                                                (uint8_t*)dEmptyValue_.get(), static_cast<uint32_t>(n));
+            }
         }
+        // 统一完成边界：一次等待覆盖全部子表查询与合并核（S 次逐表等待 → 1 次）。
+        CheckRet(aclrtSynchronizeStream(stream), "DynamicMap::Find::aclrtSynchronizeStream");
     }
 
-    /** @brief 是否包含：输出 bool（uint8）。device 合并核做按位 OR。 */
+    /** @brief 是否包含：输出 bool（uint8）。device 合并核做按位 OR。
+     *  子表查询与合并核在同一 stream 上连续提交，循环外统一同步一次，返回时结果已就绪。 */
     void Contains(void* keys, void* outputValues, Extent keyNum, aclrtStream stream)
     {
         SizeType n = static_cast<SizeType>(keyNum);
@@ -249,17 +255,19 @@ public:
             submaps_[0]->Contains(keys, outputValues, n, stream);
             return;
         }
-        submaps_[base]->Contains(keys, outputValues, n, stream);
-        if (!HasMoreNonEmptyAfter(base))
-            return;
-        EnsureScratch(static_cast<size_t>(n)); // uint8/元素
-        for (size_t s = base + 1; s < submaps_.size(); ++s) {
-            if (submapSize_[s] == 0)
-                continue;
-            submaps_[s]->Contains(keys, dScratch_.get(), n, stream);
-            aclco::MergeContains<><<<aivCoreNum_, 0, stream>>>((uint8_t*)outputValues, (uint8_t*)dScratch_.get(),
-                                                               static_cast<uint32_t>(n));
+        // 与 Find 相同：子表 ContainsAsync + 合并核同流连续提交，循环外统一同步一次。
+        submaps_[base]->ContainsAsync(keys, outputValues, n, stream);
+        if (HasMoreNonEmptyAfter(base)) {
+            EnsureScratch(static_cast<size_t>(n)); // uint8/元素
+            for (size_t s = base + 1; s < submaps_.size(); ++s) {
+                if (submapSize_[s] == 0)
+                    continue;
+                submaps_[s]->ContainsAsync(keys, dScratch_.get(), n, stream);
+                aclco::MergeContains<><<<aivCoreNum_, 0, stream>>>((uint8_t*)outputValues, (uint8_t*)dScratch_.get(),
+                                                                   static_cast<uint32_t>(n));
+            }
         }
+        CheckRet(aclrtSynchronizeStream(stream), "DynamicMap::Contains::aclrtSynchronizeStream");
     }
 
     /** @brief 删除：key 至多在一个子表，对所有非空子表执行 Erase，累加成功数。 */
