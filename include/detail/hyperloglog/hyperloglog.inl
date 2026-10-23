@@ -218,36 +218,47 @@ void HyperLogLog<Key>::Add(void* keys, ExtentType count, aclrtStream stream)
     }
     namespace h = detail::hyperloglog;
     h::ValidateInput<Key>(keys, n, device_);
-    if (n >= (1U << 20) && n <= 0x7fffffffU) {
-        switch (precision_) {
-            case 13:
-                h::LaunchLargeAdd<Key, 13>(static_cast<Key*>(keys), words_, addWorkspace_,
-                                           static_cast<std::uint32_t>(n), addCores_, cores_, stream);
-                break;
-            case 14:
-                h::LaunchLargeAdd<Key, 14>(static_cast<Key*>(keys), words_, addWorkspace_,
-                                           static_cast<std::uint32_t>(n), addCores_, cores_, stream);
-                break;
-            case 15:
-                h::LaunchLargeAdd<Key, 15>(static_cast<Key*>(keys), words_, addWorkspace_,
-                                           static_cast<std::uint32_t>(n), addCores_, cores_, stream);
-                break;
-            case 16:
-                h::LaunchLargeAdd<Key, 16>(static_cast<Key*>(keys), words_, addWorkspace_,
-                                           static_cast<std::uint32_t>(n), addCores_, cores_, stream);
-                break;
-            case 17:
-                h::LaunchLargeAdd<Key, 17>(static_cast<Key*>(keys), words_, addWorkspace_,
-                                           static_cast<std::uint32_t>(n), addCores_, cores_, stream);
-                break;
-            case 18:
-                h::LaunchLargeAdd<Key, 18>(static_cast<Key*>(keys), words_, addWorkspace_,
-                                           static_cast<std::uint32_t>(n), addCores_, cores_, stream);
-                break;
+    // Device fast paths use 32-bit offsets. Keep their existing safe bound,
+    // but split larger inputs instead of sending the entire input to AddKernel.
+    // Full chunks keep DMA input addresses aligned; the final chunk may be small.
+    // Each reduction merges with words_, so prior Adds and chunks are retained,
+    // including p18 whose private sketches always start from zero.
+    for (std::size_t offset = 0; offset < n;) {
+        auto const remaining = n - offset;
+        auto const batch = remaining <= 0x7fffffffU ? remaining : std::size_t{1U << 30};
+        auto* batchKeys = static_cast<Key*>(keys) + offset;
+        if (batch >= (1U << 20)) {
+            switch (precision_) {
+                case 13:
+                    h::LaunchLargeAdd<Key, 13>(batchKeys, words_, addWorkspace_,
+                                               static_cast<std::uint32_t>(batch), addCores_, cores_, stream);
+                    break;
+                case 14:
+                    h::LaunchLargeAdd<Key, 14>(batchKeys, words_, addWorkspace_,
+                                               static_cast<std::uint32_t>(batch), addCores_, cores_, stream);
+                    break;
+                case 15:
+                    h::LaunchLargeAdd<Key, 15>(batchKeys, words_, addWorkspace_,
+                                               static_cast<std::uint32_t>(batch), addCores_, cores_, stream);
+                    break;
+                case 16:
+                    h::LaunchLargeAdd<Key, 16>(batchKeys, words_, addWorkspace_,
+                                               static_cast<std::uint32_t>(batch), addCores_, cores_, stream);
+                    break;
+                case 17:
+                    h::LaunchLargeAdd<Key, 17>(batchKeys, words_, addWorkspace_,
+                                               static_cast<std::uint32_t>(batch), addCores_, cores_, stream);
+                    break;
+                case 18:
+                    h::LaunchLargeAdd<Key, 18>(batchKeys, words_, addWorkspace_,
+                                               static_cast<std::uint32_t>(batch), addCores_, cores_, stream);
+                    break;
+            }
+        } else {
+            auto const launchCores = std::min<std::size_t>(addCores_, (batch + h::threads - 1) / h::threads);
+            h::AddKernel<Key><<<launchCores, 0, stream>>>(words_, batchKeys, batch, precision_);
         }
-    } else {
-        auto const launchCores = std::min<std::size_t>(addCores_, (n + h::threads - 1) / h::threads);
-        h::AddKernel<Key><<<launchCores, 0, stream>>>(words_, static_cast<Key*>(keys), n, precision_);
+        offset += batch;
     }
     h::Sync(stream);
 }
