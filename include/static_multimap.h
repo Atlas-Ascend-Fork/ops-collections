@@ -381,25 +381,7 @@ public:
                                                                        offsets.Data(), keys, values);
             mm::Sync(stream);
         }
-        // Sorting makes direct-storage exports reproducible; API ordering remains unspecified.
-        mm::Buffer<Key> keyScratch(s.size > 1 ? s.size : 0);
-        mm::Buffer<Value> valueScratch(s.size > 1 ? s.size : 0);
-        auto nextKeys = keyScratch.Data();
-        auto nextValues = valueScratch.Data();
-        for (SizeType width = 1; width < s.size; width *= 2) {
-            mm::Merge<Key, Value><<<mm::Blocks(), 0, stream>>>(keys, values, nextKeys, nextValues, s.size, width);
-            std::swap(keys, nextKeys);
-            std::swap(values, nextValues);
-        }
-        if (keys != keyOut) {
-            mm::Check(aclrtMemcpyAsync(keyOut, mm::Bytes<Key>(s.size), keys, mm::Bytes<Key>(s.size),
-                                       ACL_MEMCPY_DEVICE_TO_DEVICE, stream),
-                      "copy sorted keys");
-            mm::Check(aclrtMemcpyAsync(valueOut, mm::Bytes<Value>(s.size), values, mm::Bytes<Value>(s.size),
-                                       ACL_MEMCPY_DEVICE_TO_DEVICE, stream),
-                      "copy sorted values");
-        }
-        mm::Sync(stream);
+        // Output order is unspecified; compaction already exports all pairs.
         return s.size;
     }
 };

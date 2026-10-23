@@ -107,15 +107,31 @@ void CheckDirectExport(aclco::StaticMultimap<T, T>& map, std::vector<aclco::Pair
 {
     Device<T> allKeys(admitted.size()), allValues(admitted.size());
     REQUIRE(map.RetrieveAll(allKeys.Data(), allValues.Data(), Extent(admitted.size()), stream) == admitted.size());
-    auto sorted = admitted;
-    std::sort(sorted.begin(), sorted.end(), [](auto const& a, auto const& b) {
-        return a.first < b.first || (a.first == b.first && a.second < b.second);
-    });
+    auto less = [](auto const& a, auto const& b) {
+        return a.first < b.first ||
+               (a.first == b.first && a.second < b.second);
+    };
+
+    auto expected = admitted;
+    std::sort(expected.begin(), expected.end(), less);
+
     auto actualKeys = allKeys.CopyToHost(stream);
     auto actualValues = allValues.CopyToHost(stream);
-    for (std::size_t i = 0; i < sorted.size(); ++i) {
-        REQUIRE(actualKeys[i] == sorted[i].first);
-        REQUIRE(actualValues[i] == sorted[i].second);
+
+    std::vector<aclco::Pair<T, T>> actual;
+    actual.reserve(actualKeys.size());
+
+    for (std::size_t i = 0; i < actualKeys.size(); ++i) {
+        actual.push_back({actualKeys[i], actualValues[i]});
+    }
+
+    std::sort(actual.begin(), actual.end(), less);
+
+    REQUIRE(actual.size() == expected.size());
+
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        REQUIRE(actual[i].first == expected[i].first);
+        REQUIRE(actual[i].second == expected[i].second);
     }
 }
 } // namespace
