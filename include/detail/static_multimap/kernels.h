@@ -11,6 +11,9 @@ namespace aclco::detail::multimap {
 constexpr std::size_t CHUNK = 256;
 constexpr uint32_t THREADS = 1024;
 constexpr uint32_t INSERT_THREADS = 1024;
+// Above this batch size the warp-parallel single-pass per-chunk insert is
+// cheaper than materializing every rank and scanning the input a second time.
+constexpr std::size_t rankedInsertMaximumKeys = 1ULL << 20;
 
 COLLECTION_SIMT_DEVICE std::size_t ThreadIndex()
 {
@@ -126,47 +129,45 @@ COLLECTION_SIMT_VF LAUNCH_BOUND(THREADS) inline void OffsetSimt(__gm__ uint64_t*
     }
 }
 
+template <class Key, class Value>
+COLLECTION_SIMT_DEVICE bool InsertSelected(StaticMultimapRef<Key, Value> const& ref,
+                                           __gm__ Pair<Key, Value>* table, __gm__ uint64_t* indices,
+                                           __gm__ Pair<Key, Value>* input, std::size_t inputIndex,
+                                           std::size_t position)
+{
+    auto pair = input[inputIndex];
+    if (indices) {
+        table[position].first = pair.first;
+        table[position].second = pair.second;
+    }
+    return indices ? ref.InsertIndex(pair.first, position) : ref.Insert(pair.first, pair.second);
+}
+
 template <class Key, class Value, class Stencil, class Predicate, bool Conditional>
 COLLECTION_SIMT_VF LAUNCH_BOUND(INSERT_THREADS) inline void InsertSimt(
     __gm__ Pair<Key, Value>* table, __gm__ uint64_t* indices, std::size_t capacity, Key emptyKey, Value emptyValue,
     __gm__ Pair<Key, Value>* input, __gm__ Stencil* stencil, std::size_t n, __gm__ uint64_t* offsets,
-    std::size_t accepted, std::size_t size, __gm__ uint32_t* failed)
+    __gm__ uint64_t* ranks, std::size_t accepted, std::size_t size, __gm__ uint32_t* failed)
 {
     StaticMultimapRef<Key, Value> ref{table, capacity, emptyKey, emptyValue, indices};
     if constexpr (!Conditional) {
+        (void)ranks;
         for (auto i = ThreadIndex(); i < accepted; i += ThreadStride()) {
-            auto pair = input[i];
-            if (indices) {
-                table[size + i].first = pair.first;
-                table[size + i].second = pair.second;
-            }
-            if (!(indices ? ref.InsertIndex(pair.first, size + i) : ref.Insert(pair.first, pair.second))) {
+            if (!InsertSelected(ref, table, indices, input, i, size + i)) {
                 AscendC::Simt::AtomicCas(failed, uint32_t(0), uint32_t(1));
             }
         }
     } else {
-        auto chunks = (n - 1) / CHUNK + 1;
-        for (auto c = ThreadIndex(); c < chunks; c += ThreadStride()) {
-            auto rank = offsets[c];
-            auto end = (c + 1) * CHUNK;
-            if (end > n) {
-                end = n;
+        for (auto i = ThreadIndex(); i < n; i += ThreadStride()) {
+            if (!Predicate{}(stencil[i])) {
+                continue;
             }
-            for (auto i = c * CHUNK; i < end && rank < accepted; ++i) {
-                if (!Predicate{}(stencil[i])) {
-                    continue;
-                }
-                auto pair = input[i];
-                if (indices) {
-                    table[size + rank].first = pair.first;
-                    table[size + rank].second = pair.second;
-                }
-                bool inserted = indices ? ref.InsertIndex(pair.first, size + rank) :
-                                          ref.Insert(pair.first, pair.second);
-                ++rank;
-                if (!inserted) {
-                    AscendC::Simt::AtomicCas(failed, uint32_t(0), uint32_t(1));
-                }
+            auto const rank = ranks[i];
+            if (rank >= accepted) {
+                continue;
+            }
+            if (!InsertSelected(ref, table, indices, input, i, size + rank)) {
+                AscendC::Simt::AtomicCas(failed, uint32_t(0), uint32_t(1));
             }
         }
     }
@@ -431,15 +432,43 @@ COLLECTION_AIV_GLOBAL void Offset(__gm__ uint64_t* values, __gm__ uint64_t* sums
     AscendC::Simt::VF_CALL<OffsetSimt>(AscendC::Simt::Dim3{THREADS}, values, sums, n, chunks);
 }
 
+template <class Stencil, class Predicate>
+COLLECTION_SIMT_VF LAUNCH_BOUND(THREADS) inline void RankSimt(__gm__ Stencil* stencil, __gm__ uint64_t* ranks,
+                                                              std::size_t n, __gm__ uint64_t* offsets)
+{
+    auto chunks = (n - 1) / CHUNK + 1;
+    for (auto c = ThreadIndex(); c < chunks; c += ThreadStride()) {
+        auto rank = offsets[c];
+        auto end = (c + 1) * CHUNK;
+        if (end > n) {
+            end = n;
+        }
+        for (auto i = c * CHUNK; i < end; ++i) {
+            if (Predicate{}(stencil[i])) {
+                ranks[i] = rank;
+                ++rank;
+            }
+        }
+    }
+}
+
+template <class Stencil, class Predicate>
+COLLECTION_AIV_GLOBAL void Rank(__gm__ Stencil* stencil, __gm__ uint64_t* ranks, std::size_t n,
+                                __gm__ uint64_t* offsets)
+{
+    AscendC::Simt::VF_CALL<RankSimt<Stencil, Predicate>>(AscendC::Simt::Dim3{THREADS}, stencil, ranks, n, offsets);
+}
+
 template <class Key, class Value, class Stencil, class Predicate, bool Conditional>
 COLLECTION_AIV_GLOBAL void Insert(__gm__ Pair<Key, Value>* table, __gm__ uint64_t* indices, std::size_t capacity,
                                   Key emptyKey, Value emptyValue, __gm__ Pair<Key, Value>* input,
                                   __gm__ Stencil* stencil, std::size_t n, __gm__ uint64_t* offsets,
-                                  std::size_t accepted, std::size_t size, __gm__ uint32_t* failed)
+                                  __gm__ uint64_t* ranks, std::size_t accepted, std::size_t size,
+                                  __gm__ uint32_t* failed)
 {
     AscendC::Simt::VF_CALL<InsertSimt<Key, Value, Stencil, Predicate, Conditional>>(
         AscendC::Simt::Dim3{INSERT_THREADS}, table, indices, capacity, emptyKey, emptyValue, input, stencil, n, offsets,
-        accepted, size, failed);
+        ranks, accepted, size, failed);
 }
 
 template <class Key, class Value, class Stencil, class Predicate, bool Conditional, int Mode>
@@ -501,3 +530,5 @@ COLLECTION_AIV_GLOBAL void Merge(__gm__ Key* keys, __gm__ Value* values, __gm__ 
                                                   width);
 }
 } // namespace aclco::detail::multimap
+
+#include "detail/static_multimap/insert_warp.inl"

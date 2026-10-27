@@ -121,13 +121,11 @@ class StaticMultimap {
     }
 
     template <class Stencil, class Predicate, bool Conditional>
-    std::size_t InsertImpl(void* pairs, Stencil* stencil, std::size_t n, aclrtStream stream)
+    std::size_t CountSelected(void* pairs, Stencil* stencil, std::size_t n,
+                              detail::multimap::Buffer<uint64_t>& counts, aclrtStream stream)
     {
         namespace mm = detail::multimap;
         auto& s = Get();
-        if (!n) {
-            return 0;
-        }
         mm::RequirePointer(pairs);
         if constexpr (Conditional) {
             mm::RequirePointer(stencil);
@@ -135,7 +133,6 @@ class StaticMultimap {
         }
         mm::Bytes<Pair<Key, Value>>(n);
         auto chunks = mm::Chunks(n);
-        mm::Buffer<uint64_t> counts;
         if constexpr (Conditional) {
             counts = mm::Buffer<uint64_t>(chunks + 1);
         }
@@ -151,17 +148,46 @@ class StaticMultimap {
         if (mm::Read(status)) {
             throw std::invalid_argument("StaticMultimap: selected input contains a reserved key or value");
         }
-        std::size_t selected = n;
         if constexpr (Conditional) {
-            selected = mm::Read(counts.Data() + chunks);
+            return mm::Read(counts.Data() + chunks);
         }
+        return n;
+    }
+
+    template <class Stencil, class Predicate, bool Conditional>
+    std::size_t InsertImpl(void* pairs, Stencil* stencil, std::size_t n, aclrtStream stream)
+    {
+        namespace mm = detail::multimap;
+        auto& s = Get();
+        if (!n) {
+            return 0;
+        }
+        mm::Buffer<uint64_t> counts;
+        auto selected = CountSelected<Stencil, Predicate, Conditional>(pairs, stencil, n, counts, stream);
         auto accepted = std::min(selected, s.capacity - s.size);
         if (!accepted) {
             return selected;
         }
-        mm::Insert<Key, Value, Stencil, Predicate, Conditional><<<mm::Blocks(), 0, stream>>>(
-            s.table.Data(), s.indices.Data(), s.capacity, s.emptyKey, s.emptyValue,
-            static_cast<Pair<Key, Value>*>(pairs), stencil, n, counts.Data(), accepted, s.size, status);
+        auto status = s.status.Data();
+        auto* input = static_cast<Pair<Key, Value>*>(pairs);
+        auto insertRanked = [&](uint64_t* ranks) {
+            mm::Insert<Key, Value, Stencil, Predicate, Conditional><<<mm::Blocks(), 0, stream>>>(
+                s.table.Data(), s.indices.Data(), s.capacity, s.emptyKey, s.emptyValue, input, stencil, n,
+                counts.Data(), ranks, accepted, s.size, status);
+        };
+        if constexpr (Conditional) {
+            if (n <= mm::rankedInsertMaximumKeys) {
+                mm::Buffer<uint64_t> ranks(n);
+                mm::Rank<Stencil, Predicate><<<mm::Blocks(), 0, stream>>>(stencil, ranks.Data(), n, counts.Data());
+                insertRanked(ranks.Data());
+            } else {
+                mm::InsertWarp<Key, Value, Stencil, Predicate><<<mm::Blocks(), 0, stream>>>(
+                    s.table.Data(), s.indices.Data(), s.capacity, s.emptyKey, s.emptyValue, input, stencil, n,
+                    counts.Data(), accepted, s.size, status);
+            }
+        } else {
+            insertRanked(nullptr);
+        }
         mm::Sync(stream);
         if (mm::Read(status)) {
             // The admitted prefix fits by construction. A failure indicates a
