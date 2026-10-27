@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "detail/bloom_filter/kernels.h"
+#include "bloom_filter.h"
 #include "tests/common/acl_env.h"
 #include "tests/common/bloom_filter_golden.h"
 #include "tests/common/device_buffer.h"

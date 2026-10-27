@@ -108,11 +108,19 @@ private:
     static void Synchronize(aclrtStream stream, char const* operation);
     static std::uint32_t LaunchCoreNum(std::uint64_t workItems);
     bool EnsureAddWorkspace(std::uint64_t keyNum, aclrtStream stream) noexcept;
+    // knownEmpty_ is valid only until the next write or mutable Data() exposure.
+    // Every mutating path calls MarkDirty(); Clear() is the only path that can
+    // restore the known-empty state through ResetKnownEmpty().
+    void MarkDirty() noexcept { knownEmpty_ = false; }
+    void ResetKnownEmpty() noexcept { knownEmpty_ = !mutableDataExposed_; }
+    bool EnsureSelectedFlag(aclrtStream stream);
+    bool TryPrivateAdd(void* keys, void* stencil, SizeType count, bool preserveExisting, aclrtStream stream);
     void Release() noexcept;
 
     AllocatorType allocator_;
     WordType* data_{nullptr};
     WordType* addWorkspace_{nullptr};
+    WordType* addSelectedFlag_{nullptr};
     SizeType numBlocks_{0};
     PolicyType policy_;
     std::uint32_t addSlotsPerBlock_{0};
