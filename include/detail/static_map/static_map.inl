@@ -166,7 +166,7 @@ template <class Key,
 void StaticMap<Key, T, Extent, KeyEqual, ProbingScheme, Storage>::InsertAndFind(void *values, void *outputFind, void *outputInsert, Extent valueNum, aclrtStream stream)
 {
   InsertAndFindAsync(values, outputFind, outputInsert, valueNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticMap::InsertAndFind::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -223,7 +223,7 @@ template <class Key,
 void StaticMap<Key, T, Extent, KeyEqual, ProbingScheme, Storage>::Find(void *keys, void *outputValues, Extent keyNum, aclrtStream stream)
 {
   FindAsync(keys, outputValues, keyNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticMap::Find::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -247,7 +247,7 @@ template <typename StencilT, typename Predicate>
 void StaticMap<Key, T, Extent, KeyEqual, ProbingScheme, Storage>::FindIf(void *keys, StencilT *stencil, void *outputValues, Extent keyNum, aclrtStream stream)
 {
   FindIfAsync<StencilT, Predicate>(keys, stencil, outputValues, keyNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticMap::FindIf::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -271,7 +271,7 @@ template <class Key,
 void StaticMap<Key, T, Extent, KeyEqual, ProbingScheme, Storage>::Contains(void *keys, void *outputValues, Extent keyNum, aclrtStream stream)
 {
   ContainsAsync(keys, outputValues, keyNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticMap::Contains::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -295,7 +295,7 @@ template <typename StencilT, typename Predicate>
 void StaticMap<Key, T, Extent, KeyEqual, ProbingScheme, Storage>::ContainsIf(void *keys, StencilT *stencil, void *outputValues, Extent keyNum, aclrtStream stream)
 {
   ContainsIfAsync<StencilT, Predicate>(keys, stencil, outputValues, keyNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticMap::ContainsIf::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -332,7 +332,7 @@ template <typename CallbackOp>
 void StaticMap<Key, T, Extent, KeyEqual, ProbingScheme, Storage>::ForEach(void *keys, Extent keyNum, void *callbackArgs, aclrtStream stream)
 {
   ForEachAsync<CallbackOp>(keys, keyNum, callbackArgs, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticMap::ForEach::aclrtSynchronizeStream");
 }
 
 template <class Key,

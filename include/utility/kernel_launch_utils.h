@@ -10,6 +10,8 @@
 #pragma once
 
 #include <iostream>
+#include <stdexcept>
+#include <string>
 
 #include <acl/acl.h>
 #include "macros.h"
@@ -17,5 +19,11 @@
 COLLECTION_HOST void CheckRet(uint32_t ret, const char* funcName) {
   if (ret != 0) {
     std::cout << funcName << " execute failed! ret:" << ret << "\n";
+  }
+}
+
+COLLECTION_HOST void CheckRetOrThrow(uint32_t ret, const char* funcName) {
+  if (ret != 0) {
+    throw std::runtime_error(std::string(funcName) + " execute failed! ret:" + std::to_string(ret));
   }
 }

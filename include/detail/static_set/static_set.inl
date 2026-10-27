@@ -95,7 +95,7 @@ template <class Key,
 void StaticSet<Key, Extent, KeyEqual, ProbingScheme, Storage>::InsertAndFind(void *keys, void *outputFind, void *outputInsert, Extent keyNum, aclrtStream stream)
 {
   InsertAndFindAsync(keys, outputFind, outputInsert, keyNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticSet::InsertAndFind::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -147,7 +147,7 @@ template <class Key,
 void StaticSet<Key, Extent, KeyEqual, ProbingScheme, Storage>::Find(void *keys, void *outputValues, Extent keyNum, aclrtStream stream)
 {
   FindAsync(keys, outputValues, keyNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticSet::Find::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -169,7 +169,7 @@ template <typename StencilT, typename Predicate>
 void StaticSet<Key, Extent, KeyEqual, ProbingScheme, Storage>::FindIf(void *keys, StencilT *stencil, void *outputValues, Extent keyNum, aclrtStream stream)
 {
   FindIfAsync<StencilT, Predicate>(keys, stencil, outputValues, keyNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticSet::FindIf::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -191,7 +191,7 @@ template <class Key,
 void StaticSet<Key, Extent, KeyEqual, ProbingScheme, Storage>::Contains(void *keys, void *outputValues, Extent keyNum, aclrtStream stream)
 {
   ContainsAsync(keys, outputValues, keyNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticSet::Contains::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -213,7 +213,7 @@ template <typename StencilT, typename Predicate>
 void StaticSet<Key, Extent, KeyEqual, ProbingScheme, Storage>::ContainsIf(void *keys, StencilT *stencil, void *outputValues, Extent keyNum, aclrtStream stream)
 {
   ContainsIfAsync<StencilT, Predicate>(keys, stencil, outputValues, keyNum, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticSet::ContainsIf::aclrtSynchronizeStream");
 }
 
 template <class Key,
@@ -247,7 +247,7 @@ template <typename CallbackOp>
 void StaticSet<Key, Extent, KeyEqual, ProbingScheme, Storage>::ForEach(void *keys, Extent keyNum, void *callbackArgs, aclrtStream stream)
 {
   ForEachAsync<CallbackOp>(keys, keyNum, callbackArgs, stream);
-  aclrtSynchronizeStream(stream);
+  CheckRetOrThrow(aclrtSynchronizeStream(stream), "StaticSet::ForEach::aclrtSynchronizeStream");
 }
 
 template <class Key,
