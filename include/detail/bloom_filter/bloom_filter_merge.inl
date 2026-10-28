@@ -27,6 +27,9 @@ void BloomFilter<Key, Extent, Policy, Allocator>::MergeAsync(BloomFilter const& 
   if (this == &other) {
     return;
   }
+  if (other.knownEmpty_) {
+    return;
+  }
   MarkDirty();
   std::uint64_t const words = static_cast<std::uint64_t>(NumWords());
   std::uint32_t const cores = LaunchCoreNum(words);
@@ -50,6 +53,10 @@ void BloomFilter<Key, Extent, Policy, Allocator>::IntersectAsync(BloomFilter con
 {
   ValidateCompatible(other, "Intersect");
   if (this == &other) {
+    return;
+  }
+  if (knownEmpty_ || other.knownEmpty_) {
+    ClearAsync(stream);
     return;
   }
   MarkDirty();

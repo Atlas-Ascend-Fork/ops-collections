@@ -124,6 +124,9 @@ void BloomFilter<Key, Extent, Policy, Allocator>::ClearAsync(aclrtStream stream)
   if (data_ == nullptr || numBlocks_ == 0) {
     return;
   }
+  if (knownEmpty_ && !mutableDataExposed_) {
+    return;
+  }
   std::uint64_t const words = static_cast<std::uint64_t>(NumWords());
   std::uint32_t const cores = LaunchCoreNum(words);
   aclco::BloomFilterClear<WordType><<<cores, 0, stream>>>(

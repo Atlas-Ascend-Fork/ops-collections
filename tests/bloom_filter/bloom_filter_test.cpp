@@ -65,6 +65,42 @@ std::vector<Word> CopyFilterWords(Word const* device, std::size_t count, aclrtSt
     return host;
 }
 
+bool AllBytesZero(std::vector<std::uint8_t> const& values)
+{
+    return std::all_of(values.begin(), values.end(), [](std::uint8_t value) { return value == 0; });
+}
+
+template <typename Word>
+bool AllWordsZero(Word const* device, std::size_t count, aclrtStream stream)
+{
+    auto const words = CopyFilterWords(device, count, stream);
+    return std::all_of(words.begin(), words.end(), [](Word value) { return value == Word{0}; });
+}
+
+struct EmptyFilterTestData {
+    static constexpr std::size_t numBlocks = 257;
+    static constexpr std::size_t keyCount = 128;
+
+    aclrtStream stream;
+    std::vector<std::uint32_t> keys;
+    std::vector<std::uint8_t> stencil;
+    aclco::test::DeviceBuffer<std::uint32_t> deviceKeys;
+    aclco::test::DeviceBuffer<std::uint8_t> deviceStencil;
+    aclco::test::DeviceBuffer<std::uint8_t> deviceOutput;
+
+    explicit EmptyFilterTestData(aclrtStream s)
+        : stream(s), keys(MakeKeys<std::uint32_t>(keyCount)), stencil(keyCount, 1), deviceKeys(keyCount),
+          deviceStencil(keyCount), deviceOutput(keyCount)
+    {
+        deviceKeys.CopyFromHostAsync(keys.data(), keys.size(), stream);
+        deviceStencil.CopyFromHostAsync(stencil.data(), stencil.size(), stream);
+        deviceOutput.MemsetZero(stream);
+        aclco::test::Sync(stream);
+    }
+
+    aclco::Extent<std::size_t> KeyExtent() const { return aclco::Extent<std::size_t>{keyCount}; }
+};
+
 template <typename Filter>
 void RequireInitialState(Filter const& filter, std::size_t numBlocks, aclrtStream stream)
 {
@@ -223,4 +259,61 @@ TEST_CASE("BloomFilter rejects a zero block extent", "[bloom_filter][validation]
     using SmallFilter = aclco::BloomFilter<std::uint32_t, SmallExtent>;
     std::uint32_t const wordCountOverflow = std::numeric_limits<std::uint32_t>::max() / SmallFilter::wordsPerBlock + 1;
     REQUIRE_THROWS_AS((SmallFilter{SmallExtent{wordCountOverflow}}), std::length_error);
+}
+
+TEST_CASE("BloomFilter empty-filter sync fast paths preserve semantics", "[bloom_filter][empty]")
+{
+    aclco::test::AclGlobalGuard acl;
+    aclco::test::AclStreamGuard streamGuard;
+    aclrtStream stream = streamGuard.stream;
+    EmptyFilterTestData data(stream);
+    using Filter = aclco::BloomFilter<std::uint32_t>;
+    auto const extent = aclco::Extent<std::size_t>{EmptyFilterTestData::numBlocks};
+
+    Filter emptyA(extent, typename Filter::PolicyType{}, stream);
+    Filter emptyB(extent, typename Filter::PolicyType{}, stream);
+    emptyA.Contains(data.deviceKeys.Data(), data.KeyExtent(), data.deviceOutput.Data(), stream);
+    REQUIRE(AllBytesZero(data.deviceOutput.CopyToHost(stream)));
+
+    data.deviceOutput.MemsetZero(stream);
+    emptyA.ContainsIf(data.deviceKeys.Data(), data.deviceStencil.Data(), data.deviceOutput.Data(), data.KeyExtent(),
+                      stream);
+    REQUIRE(AllBytesZero(data.deviceOutput.CopyToHost(stream)));
+
+    emptyA.Clear(stream);
+    REQUIRE(AllWordsZero(std::as_const(emptyA).Data(), static_cast<std::size_t>(emptyA.NumWords()), stream));
+    emptyA.Merge(emptyB, stream);
+    REQUIRE(AllWordsZero(std::as_const(emptyA).Data(), static_cast<std::size_t>(emptyA.NumWords()), stream));
+    emptyA.Intersect(emptyB, stream);
+    REQUIRE(AllWordsZero(std::as_const(emptyA).Data(), static_cast<std::size_t>(emptyA.NumWords()), stream));
+}
+
+TEST_CASE("BloomFilter empty-filter async and mixed-source semantics", "[bloom_filter][empty]")
+{
+    aclco::test::AclGlobalGuard acl;
+    aclco::test::AclStreamGuard streamGuard;
+    aclrtStream stream = streamGuard.stream;
+    EmptyFilterTestData data(stream);
+    using Filter = aclco::BloomFilter<std::uint32_t>;
+    auto const extent = aclco::Extent<std::size_t>{EmptyFilterTestData::numBlocks};
+
+    Filter empty(extent, typename Filter::PolicyType{}, stream);
+    Filter nonEmpty(extent, typename Filter::PolicyType{}, stream);
+    empty.ClearAsync(stream);
+    empty.ContainsAsync(data.deviceKeys.Data(), data.KeyExtent(), data.deviceOutput.Data(), stream);
+    aclco::test::Sync(stream);
+    REQUIRE(AllBytesZero(data.deviceOutput.CopyToHost(stream)));
+
+    nonEmpty.Add(data.deviceKeys.Data(), data.KeyExtent(), stream);
+    auto const beforeMerge = CopyFilterWords(std::as_const(nonEmpty).Data(),
+                                             static_cast<std::size_t>(nonEmpty.NumWords()), stream);
+    nonEmpty.Merge(empty, stream);
+    REQUIRE(CopyFilterWords(std::as_const(nonEmpty).Data(),
+                            static_cast<std::size_t>(nonEmpty.NumWords()), stream) == beforeMerge);
+
+    nonEmpty.Intersect(empty, stream);
+    REQUIRE(AllWordsZero(std::as_const(nonEmpty).Data(), static_cast<std::size_t>(nonEmpty.NumWords()), stream));
+    data.deviceOutput.MemsetZero(stream);
+    nonEmpty.Contains(data.deviceKeys.Data(), data.KeyExtent(), data.deviceOutput.Data(), stream);
+    REQUIRE(AllBytesZero(data.deviceOutput.CopyToHost(stream)));
 }

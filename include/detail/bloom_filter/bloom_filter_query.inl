@@ -66,6 +66,13 @@ void BloomFilter<Key, Extent, Policy, Allocator>::ContainsAsync(
     throw std::invalid_argument(
       "BloomFilter::ContainsAsync: outputValues must not be null when keyNum is non-zero");
   }
+  if (knownEmpty_) {
+    if (aclrtMemsetAsync(outputValues, static_cast<std::size_t>(count), 0,
+                         static_cast<std::size_t>(count), stream) != ACL_SUCCESS) {
+      throw std::runtime_error("BloomFilter::ContainsAsync: aclrtMemsetAsync failed");
+    }
+    return;
+  }
   std::uint32_t const cores = LaunchCoreNum(static_cast<std::uint64_t>(count));
   aclco::BloomFilterContains<KeyType, PolicyType><<<cores, 0, stream>>>(
     reinterpret_cast<std::uint8_t*>(data_),
@@ -128,6 +135,13 @@ void BloomFilter<Key, Extent, Policy, Allocator>::ContainsIfAsync(
   if (outputValues == nullptr) {
     throw std::invalid_argument(
       "BloomFilter::ContainsIfAsync: outputValues must not be null when keyNum is non-zero");
+  }
+  if (knownEmpty_) {
+    if (aclrtMemsetAsync(outputValues, static_cast<std::size_t>(count), 0,
+                         static_cast<std::size_t>(count), stream) != ACL_SUCCESS) {
+      throw std::runtime_error("BloomFilter::ContainsIfAsync: aclrtMemsetAsync failed");
+    }
+    return;
   }
   std::uint32_t const cores =
     LaunchCoreNum(static_cast<std::uint64_t>(count));
