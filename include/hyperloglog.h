@@ -54,6 +54,7 @@ private:
     std::uint32_t precision_{0};
     std::uint32_t cores_{0};
     std::int32_t device_{-1};
+    bool knownEmpty_{false};
     mutable std::vector<std::uint32_t> hostHistogram_;
 };
 } // namespace aclco

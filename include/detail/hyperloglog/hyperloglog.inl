@@ -99,6 +99,16 @@ inline void LaunchLargeAdd(Key const* keys, std::uint32_t* words, std::uint32_t*
     }
     LaunchReduce(words, workspace, (1U << Precision) / 4, addCores, reduceCores, stream);
 }
+
+template <class Key, unsigned Precision>
+inline void LaunchSmallAdd(Key const* keys, std::uint32_t* words, std::uint32_t* workspace, unsigned count,
+                           unsigned addCores, unsigned reduceCores, aclrtStream stream)
+{
+    constexpr unsigned elementsPerCore = Precision <= 17 ? TiledInputBytes<Precision>() / sizeof(Key) : 4096U;
+    auto const activeCores = std::min(addCores, (count + elementsPerCore - 1) / elementsPerCore);
+    LaunchPrivate<Key, Precision>(keys, workspace, count, activeCores, stream);
+    LaunchReduce(words, workspace, (1U << Precision) / 4, activeCores, reduceCores, stream);
+}
 } // namespace aclco::detail::hyperloglog
 namespace aclco {
 template <class Key>
@@ -172,6 +182,7 @@ HyperLogLog<Key>& HyperLogLog<Key>::operator=(HyperLogLog&& other) noexcept
         precision_ = std::exchange(other.precision_, 0);
         cores_ = std::exchange(other.cores_, 0);
         device_ = std::exchange(other.device_, -1);
+        knownEmpty_ = std::exchange(other.knownEmpty_, false);
         hostHistogram_ = std::move(other.hostHistogram_);
     }
     return *this;
@@ -204,8 +215,10 @@ template <class Key>
 void HyperLogLog<Key>::Clear(aclrtStream stream)
 {
     Validate();
+    knownEmpty_ = false;
     detail::hyperloglog::ClearKernel<><<<cores_, 0, stream>>>(words_, (1U << precision_) / 4);
     detail::hyperloglog::Sync(stream);
+    knownEmpty_ = true;
 }
 template <class Key>
 void HyperLogLog<Key>::Add(void* keys, ExtentType count, aclrtStream stream)
@@ -218,6 +231,42 @@ void HyperLogLog<Key>::Add(void* keys, ExtentType count, aclrtStream stream)
     }
     namespace h = detail::hyperloglog;
     h::ValidateInput<Key>(keys, n, device_);
+    // Private sketches amortize their initialization on a fresh sketch, but
+    // regress redundant Adds whose global registers already reject most keys.
+    // Preserve the direct path after the first nonempty Add and for tiny inputs.
+    auto const smallThreshold = precision_ <= 14 ? (1U << 14) : (1U << 18);
+    bool const useSmall = knownEmpty_ && n >= smallThreshold && n < (1U << 20);
+    knownEmpty_ = false;
+    if (useSmall) {
+        switch (precision_) {
+            case 13:
+                h::LaunchSmallAdd<Key, 13>(static_cast<Key*>(keys), words_, addWorkspace_, n, addCores_, cores_,
+                                           stream);
+                break;
+            case 14:
+                h::LaunchSmallAdd<Key, 14>(static_cast<Key*>(keys), words_, addWorkspace_, n, addCores_, cores_,
+                                           stream);
+                break;
+            case 15:
+                h::LaunchSmallAdd<Key, 15>(static_cast<Key*>(keys), words_, addWorkspace_, n, addCores_, cores_,
+                                           stream);
+                break;
+            case 16:
+                h::LaunchSmallAdd<Key, 16>(static_cast<Key*>(keys), words_, addWorkspace_, n, addCores_, cores_,
+                                           stream);
+                break;
+            case 17:
+                h::LaunchSmallAdd<Key, 17>(static_cast<Key*>(keys), words_, addWorkspace_, n, addCores_, cores_,
+                                           stream);
+                break;
+            case 18:
+                h::LaunchSmallAdd<Key, 18>(static_cast<Key*>(keys), words_, addWorkspace_, n, addCores_, cores_,
+                                           stream);
+                break;
+        }
+        h::Sync(stream);
+        return;
+    }
     // Device fast paths use 32-bit offsets. Keep their existing safe bound,
     // but split larger inputs instead of sending the entire input to AddKernel.
     // Full chunks keep DMA input addresses aligned; the final chunk may be small.
@@ -269,8 +318,10 @@ void HyperLogLog<Key>::Merge(HyperLogLog const& other, aclrtStream stream)
     other.Validate();
     if (precision_ != other.precision_ || device_ != other.device_)
         throw std::invalid_argument("HyperLogLog: incompatible sketches");
-    if (this != &other)
+    if (this != &other) {
+        knownEmpty_ = knownEmpty_ && other.knownEmpty_;
         detail::hyperloglog::MergeKernel<><<<cores_, 0, stream>>>(words_, other.words_, (1U << precision_) / 4);
+    }
     detail::hyperloglog::Sync(stream);
 }
 template <class Key>

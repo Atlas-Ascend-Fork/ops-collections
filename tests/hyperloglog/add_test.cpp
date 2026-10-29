@@ -18,6 +18,7 @@
 #include "common/acl_env.h"
 #include "common/device_buffer.h"
 #include "common/hll_test_common.h"
+#include "common/bloom_filter_golden.h"
 #include "hyperloglog.h"
 
 using namespace aclco::test::hll_cases;
@@ -311,4 +312,87 @@ void RunLargeTests()
 TEST_CASE("hyperloglog large Add preserves every chunk and continuation", "[.][hyperloglog][add][large-boundary]")
 {
     RunLargeTests();
+}
+
+namespace {
+
+
+template <class Key>
+void GoldenAdd(std::vector<std::uint8_t>& registers, std::vector<Key> const& keys, unsigned precision)
+{
+    for (auto key : keys) {
+        auto const hash = aclco::test::bloom_golden_detail::XXHash64(key);
+        auto const index = hash >> (64 - precision);
+        auto tail = (hash << precision) | (std::uint64_t{1} << (precision - 1));
+        std::uint8_t rank = 1;
+        while ((tail & (std::uint64_t{1} << 63)) == 0) {
+            ++rank;
+            tail <<= 1;
+        }
+        registers[index] = std::max(registers[index], rank);
+    }
+}
+
+template <class Key>
+std::vector<std::uint8_t> ReadRegisters(aclco::HyperLogLog<Key> const& sketch, unsigned precision)
+{
+    std::vector<std::uint8_t> result(1U << precision);
+    aclco::test::CheckAcl(
+        aclrtMemcpy(result.data(), result.size(), sketch.Data(), result.size(), ACL_MEMCPY_DEVICE_TO_HOST),
+        "read HLL registers");
+    return result;
+}
+} // namespace
+
+TEMPLATE_TEST_CASE_SIG("hyperloglog small Add matches CPU registers across dispatch boundaries",
+                       "[hyperloglog][add][small]", ((typename Key, int Dummy), Key, Dummy), (std::int32_t, 0),
+                       (std::int64_t, 0))
+{
+    (void)aclco::test::hll_cases::GlobalAcl();
+    aclco::test::AclStreamGuard guard;
+    auto const stream = guard.stream;
+    auto const precision = GENERATE(13U, 14U, 15U, 16U, 17U, 18U);
+    auto const n = GENERATE(1024U, 16383U, 16384U, 16385U, 262143U, 262144U, 262145U, 1048575U, 1048576U);
+    CAPTURE(sizeof(Key), precision, n);
+    std::mt19937_64 rng(20261029);
+    std::vector<Key> keys(n + 1);
+    for (auto& key : keys)
+        key = static_cast<Key>(rng());
+    keys[1] = std::numeric_limits<Key>::min();
+    keys[2] = std::numeric_limits<Key>::max();
+    keys[3] = 0;
+    keys[4] = -1;
+    // A one-element offset also covers inputs which are not DMA aligned.
+    aclco::test::DeviceBuffer<Key> input(keys.size());
+    input.CopyFromHostAsync(keys.data(), keys.size(), stream);
+    keys.erase(keys.begin());
+    std::vector<std::uint8_t> expected(1U << precision, 0);
+    GoldenAdd(expected, keys, precision);
+    auto sketch = aclco::HyperLogLog<Key>::CreateWithPrecision(precision, stream);
+    sketch.Add(nullptr, Extent{0}, stream);
+    sketch.Add(input.Data() + 1, Extent{n}, stream);
+    REQUIRE(ReadRegisters(sketch, precision) == expected);
+    auto const estimate = sketch.Estimate(stream);
+    sketch.Add(input.Data() + 1, Extent{n}, stream);
+    REQUIRE(ReadRegisters(sketch, precision) == expected);
+    REQUIRE(sketch.Estimate(stream) == estimate);
+
+    std::vector<Key> extra(16384);
+    for (auto& key : extra)
+        key = static_cast<Key>(rng());
+    aclco::test::DeviceBuffer<Key> tail(extra.size());
+    tail.CopyFromHostAsync(extra.data(), extra.size(), stream);
+    GoldenAdd(expected, extra, precision);
+    sketch.Add(tail.Data(), Extent{extra.size()}, stream);
+    REQUIRE(ReadRegisters(sketch, precision) == expected);
+
+    sketch.Clear(stream);
+    auto moved = std::move(sketch);
+    moved.Add(input.Data() + 1, Extent{n}, stream);
+    auto source = aclco::HyperLogLog<Key>::CreateWithPrecision(precision, stream);
+    source.Add(tail.Data(), Extent{extra.size()}, stream);
+    moved.Merge(source, stream);
+    REQUIRE(ReadRegisters(moved, precision) == expected);
+    moved.Add(input.Data() + 1, Extent{n}, stream);
+    REQUIRE(ReadRegisters(moved, precision) == expected);
 }
