@@ -27,6 +27,7 @@ void WriteFile(std::filesystem::path const& path, std::vector<char> const& conte
         throw std::runtime_error("cannot open output file: " + path.string());
     }
     output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+    output.close();
     if (!output) {
         throw std::runtime_error("cannot write output file: " + path.string());
     }
