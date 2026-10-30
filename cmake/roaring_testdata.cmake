@@ -66,17 +66,25 @@ function(ensure_croaring_file FILE_NAME EXPECTED_SHA256)
     set(FILE_URL
       "https://github.com/RoaringBitmap/CRoaring/releases/download/${CROARING_VERSION}/${FILE_NAME}")
     message(STATUS "Downloading CRoaring ${CROARING_VERSION}: ${FILE_NAME}")
-    file(DOWNLOAD "${FILE_URL}" "${FILE_PATH}"
-      EXPECTED_HASH "SHA256=${EXPECTED_SHA256}"
+    string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef DOWNLOAD_ID)
+    set(DOWNLOAD_PATH "${FILE_PATH}.${DOWNLOAD_ID}.tmp")
+    file(DOWNLOAD "${FILE_URL}" "${DOWNLOAD_PATH}"
       STATUS DOWNLOAD_STATUS
       TLS_VERIFY ON
     )
     list(GET DOWNLOAD_STATUS 0 DOWNLOAD_CODE)
     list(GET DOWNLOAD_STATUS 1 DOWNLOAD_MESSAGE)
     if(NOT DOWNLOAD_CODE EQUAL 0)
-      file(REMOVE "${FILE_PATH}")
+      file(REMOVE "${DOWNLOAD_PATH}")
       message(FATAL_ERROR "Failed to download ${FILE_URL}: ${DOWNLOAD_MESSAGE}")
     endif()
+    file(SHA256 "${DOWNLOAD_PATH}" DOWNLOADED_SHA256)
+    if(NOT DOWNLOADED_SHA256 STREQUAL EXPECTED_SHA256)
+      file(REMOVE "${DOWNLOAD_PATH}")
+      message(FATAL_ERROR
+        "Unexpected SHA-256 for ${FILE_URL}: expected ${EXPECTED_SHA256}, got ${DOWNLOADED_SHA256}")
+    endif()
+    file(RENAME "${DOWNLOAD_PATH}" "${FILE_PATH}")
   endif()
 
   file(SHA256 "${FILE_PATH}" ACTUAL_SHA256)
