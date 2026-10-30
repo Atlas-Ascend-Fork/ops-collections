@@ -286,7 +286,7 @@ ops-collections是一个纯头文件库，无需编译即可使用。只需在�
 
 ## 八、更多资源
 
-[CANN社区版文档](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/83RC1alpha002/index/index.html)
+[CANN社区版文档](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/900beta2/index/index.html)
 
 ## 九、许可证
 [CANN Open Software License Agreement Version 2.0](LICENSE)
