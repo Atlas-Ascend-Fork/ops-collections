@@ -162,6 +162,9 @@ public:
      */
     SizeType Insert(void* keys, Extent n, aclrtStream stream = nullptr)
     {
+        if (static_cast<SizeType>(n) <= detail::static_multiset::SMALL_INSERT_LIMIT) {
+            return InsertSmallImpl<Key, detail::static_multiset::AcceptAll, false>(keys, nullptr, n, {}, stream);
+        }
         return InsertImpl<Key, detail::static_multiset::AcceptAll, false>(keys, nullptr, n, {}, stream);
     }
 
@@ -179,6 +182,9 @@ public:
     template <typename Stencil, typename Predicate>
     SizeType InsertIf(void* keys, Extent n, Stencil* stencil, Predicate pred, aclrtStream stream = nullptr)
     {
+        if (static_cast<SizeType>(n) <= detail::static_multiset::SMALL_INSERT_LIMIT) {
+            return InsertSmallImpl<Stencil, Predicate, true>(keys, stencil, n, pred, stream);
+        }
         return InsertImpl<Stencil, Predicate, true>(keys, stencil, n, pred, stream);
     }
 
@@ -451,18 +457,63 @@ private:
             uniformCount_ = uniformLength_ = 0;
         }
     }
-    template <typename Stencil, typename Predicate, bool Conditional>
-    SizeType InsertImpl(void* keys, Stencil* stencil, SizeType n, Predicate pred, aclrtStream stream)
+    template <typename Stencil, bool Conditional>
+    bool ValidateInsertionInput(void* keys, Stencil* stencil, SizeType n) const
     {
         CheckState();
-        if (!n) {
-            return 0;
-        }
-        if (!keys) {
-            return n;
+        if (!n || !keys) {
+            return false;
         }
         if constexpr (Conditional) {
             RequirePointer(stencil);
+        }
+        return true;
+    }
+    template <typename Stencil, typename Predicate, bool Conditional>
+    SizeType FinishInsertion(void* keys, Stencil* stencil, SizeType n, const Predicate& pred, const uint64_t* totals,
+                             const uint64_t* range, aclrtStream stream)
+    {
+        SizeType accepted = std::min(totals[0], capacity_ - size_);
+        if (!accepted) {
+            return totals[0] + totals[1];
+        }
+        if (InsertInterval<Conditional>(keys, n, accepted, totals, range, stream)) {
+            return totals[0] - accepted + totals[1];
+        }
+        PrepareInsertion(totals, range, stream);
+        detail::static_multiset::InsertKernel<Key, Stencil, Predicate, Conditional>
+            <<<detail::static_multiset::BLOCKS, 0, stream>>>(Bytes(keys), Bytes(stencil), n, empty_, KeysData(),
+                                                             CountsData(), ordered_.get(), capacity_, tableCapacity_,
+                                                             size_, work_.get(), pred, direct_, directBase_);
+        Sync(stream);
+        size_ += accepted;
+        return totals[0] - accepted + totals[1];
+    }
+    // Keep small-batch preprocessing out of the large-batch insertion frame.
+    template <typename Stencil, typename Predicate, bool Conditional>
+    __attribute__((noinline)) SizeType InsertSmallImpl(void* keys, Stencil* stencil, SizeType n, Predicate pred,
+                                                       aclrtStream stream)
+    {
+        if (!ValidateInsertionInput<Stencil, Conditional>(keys, stencil, n)) {
+            return n;
+        }
+        detail::static_multiset::SmallSelectKernel<Key, Stencil, Predicate, Conditional><<<1, 0, stream>>>(
+            Bytes(keys), Bytes(stencil), n, empty_, work_.get(), pred, ordered_.get(), size_, capacity_ - size_);
+        Sync(stream);
+        uint64_t metadata[5] = {};
+        Check(
+            aclrtMemcpy(metadata, sizeof(metadata), work_.get() + detail::static_multiset::RANGE_MIN * sizeof(uint64_t),
+                        sizeof(metadata), ACL_MEMCPY_DEVICE_TO_HOST),
+            "read small insert statistics");
+        auto const* totals = metadata;
+        auto const* range = metadata + 2;
+        return FinishInsertion<Stencil, Predicate, Conditional>(keys, stencil, n, pred, totals, range, stream);
+    }
+    template <typename Stencil, typename Predicate, bool Conditional>
+    SizeType InsertImpl(void* keys, Stencil* stencil, SizeType n, Predicate pred, aclrtStream stream)
+    {
+        if (!ValidateInsertionInput<Stencil, Conditional>(keys, stencil, n)) {
+            return n;
         }
         detail::static_multiset::SelectKernel<Key, Stencil, Predicate, Conditional>
             <<<detail::static_multiset::BLOCKS, 0, stream>>>(Bytes(keys), Bytes(stencil), n, empty_, work_.get(), pred,
@@ -479,21 +530,7 @@ private:
                                             sizeof(uint64_t),
                           sizeof(range), ACL_MEMCPY_DEVICE_TO_HOST),
               "read key range");
-        SizeType accepted = std::min(totals[0], capacity_ - size_);
-        if (!accepted) {
-            return totals[0] + totals[1];
-        }
-        if (InsertInterval<Conditional>(keys, n, accepted, totals, range, stream)) {
-            return totals[0] - accepted + totals[1];
-        }
-        PrepareInsertion(totals, range, stream);
-        detail::static_multiset::InsertKernel<Key, Stencil, Predicate, Conditional>
-            <<<detail::static_multiset::BLOCKS, 0, stream>>>(Bytes(keys), Bytes(stencil), n, empty_, KeysData(),
-                                                             CountsData(), ordered_.get(), capacity_, tableCapacity_,
-                                                             size_, work_.get(), pred, direct_, directBase_);
-        Sync(stream);
-        size_ += accepted;
-        return totals[0] - accepted + totals[1];
+        return FinishInsertion<Stencil, Predicate, Conditional>(keys, stencil, n, pred, totals, range, stream);
     }
     template <int Mode, typename Stencil, typename Predicate, bool Conditional>
     void Query(void* keys, Stencil* stencil, void* output, SizeType n, Predicate pred, aclrtStream stream)

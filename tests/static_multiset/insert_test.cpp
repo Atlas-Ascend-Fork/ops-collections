@@ -10,6 +10,8 @@
  * for the full text of the License.
  */
 #include "common/static_multiset_test_common.h"
+#include <random>
+#include <unordered_map>
 
 using namespace aclco::test::static_multiset;
 
@@ -69,4 +71,59 @@ TEMPLATE_TEST_CASE_SIG("static_multiset insert capacity boundary", "[static_mult
     auto failures = set.Insert(d_keys.Data(), aclco::Extent<std::size_t>(keys.size()), stream);
     REQUIRE(failures == keys.size() - capacity);
     REQUIRE(set.Size(stream) == capacity);
+}
+
+TEMPLATE_TEST_CASE_SIG("static_multiset small insert preserves random accepted prefixes",
+                       "[static_multiset][insert][small]", ((typename Key, int Dummy), Key, Dummy), (int32_t, 0),
+                       (int64_t, 0))
+{
+    aclco::test::AclGlobalGuard acl;
+    aclco::test::AclStreamGuard guard;
+    auto stream = guard.stream;
+    for (auto n : {1u, 16u, 31u, 32u, 33u, 256u, 1023u, 1024u, 1025u, 4095u, 4096u, 4097u}) {
+        for (auto representation : {0u, 1u, 2u}) {
+            auto capacity = n / 2u + 17u;
+            CAPTURE(sizeof(Key), n, representation);
+            auto set = MakeMultiset<Key>(capacity, stream);
+            std::vector<Key> expected;
+            if (representation != 0) {
+                // Start from either a compact interval or materialized hash storage.
+                expected = representation == 1 ? std::vector<Key>{1, 2, 3, 4} :
+                                                 std::vector<Key>{-900001, 800003, -900001};
+                auto seed = InsertKeys(set, expected, stream);
+            }
+            std::mt19937_64 rng(114);
+            std::vector<Key> keys(n);
+            std::size_t valid = 0;
+            auto available = capacity - expected.size();
+            for (std::size_t i = 0; i < n; ++i) {
+                keys[i] = i % 7 == 0 ? EmptyKey<Key>() :
+                                       static_cast<Key>((static_cast<int64_t>(rng() % 2001) - 1000) * 104729);
+                if (keys[i] != EmptyKey<Key>()) {
+                    if (valid < available)
+                        expected.push_back(keys[i]);
+                    ++valid;
+                }
+            }
+            auto accepted = std::min<std::size_t>(valid, available);
+            aclco::test::DeviceBuffer<Key> input(n), output(capacity);
+            input.CopyFromHostAsync(keys.data(), keys.size(), stream);
+            auto failures = set.Insert(input.Data(), aclco::Extent<std::size_t>{n}, stream);
+            REQUIRE(failures == n - accepted);
+            REQUIRE(set.Size(stream) == expected.size());
+            REQUIRE(set.RetrieveAll(output.Data(), capacity, stream) == expected.size());
+            auto actual = output.CopyToHost(stream);
+            actual.resize(expected.size());
+            REQUIRE(actual == expected);
+            std::unordered_map<Key, uint64_t> counts;
+            for (auto key : expected)
+                ++counts[key];
+            std::vector<uint64_t> golden;
+            for (auto key : keys)
+                golden.push_back(counts[key]);
+            aclco::test::DeviceBuffer<uint64_t> result(n);
+            set.CountEach(input.Data(), result.Data(), n, stream);
+            REQUIRE(result.CopyToHost(stream) == golden);
+        }
+    }
 }
