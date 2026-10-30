@@ -629,7 +629,7 @@ function main() {
         exit 0
         ;;
       -m|--mode)
-        if [[ -z "$2" ]] || [[ "$2" =~ ^- ]]; then
+        if [[ -z "${2:-}" ]] || [[ "$2" =~ ^- ]]; then
           echo "错误: --mode 需要一个参数"
           exit 1
         fi
@@ -672,7 +672,7 @@ function main() {
         shift
         ;;
       --ascend-home)
-        if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        if [[ -z "${2:-}" ]] || [[ "$2" =~ ^- ]]; then
           echo "错误: --ascend-home 需要一个参数"
           exit 1
         fi
@@ -681,7 +681,7 @@ function main() {
         shift 2
         ;;
       --test-name)
-        if [[ -z "$2" ]]; then
+        if [[ -z "${2:-}" ]] || [[ "$2" =~ ^- ]]; then
           echo "错误: --test-name 需要一个参数"
           exit 1
         fi
@@ -689,7 +689,7 @@ function main() {
         shift 2
         ;;
       --test-pattern)
-        if [[ -z "$2" ]]; then
+        if [[ -z "${2:-}" ]] || [[ "$2" =~ ^- ]]; then
           echo "错误: --test-pattern 需要一个参数"
           exit 1
         fi
