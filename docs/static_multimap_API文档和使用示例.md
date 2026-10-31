@@ -54,6 +54,8 @@ Count 使用 uint64_t 局部计数和多层分块前缀和，每个块内由一�
 
 Retrieve 在计数阶段为单个匹配直接保存 Value，为多个匹配保存首个匹配槽位。输出阶段直接写出单个匹配；多个匹配从首个槽位开始，并在写满该查询的匹配数量后停止。该辅助数组使用带有明确活动成员的 `RetrievalMatch<Value>` 联合体，计数为1时读写Value成员，否则读写槽位成员；不依赖size_t与Value之间的类型双关或小端序。仍保留每查询计数和匹配缓存，块级前缀和未消除这两个O(NumInputs)数组；调用期间容器不可并发修改。
 
+Count 和 Retrieve 复用对象内的查询缓冲及 Prefix workspace，仅在首次使用或容量不足时分配。Clear 保留缓存，析构时释放；同一对象的调用仍须外部串行化。
+
 接近满表、高冲突或高重复键会增加线性探测成本；单个查询返回大量匹配也会增加成本。稠密模式的 RetrieveAll 时延与输入排列无关，均为一次连续导出；直接槽位模式仍包含压缩和排序成本。校验、同步和工作空间分配均在对应接口内部，计时不能排除这些成本。功能测试通过不能代替官方 32 个大规模性能用例的逐例验收。
 
 ## 测试
@@ -69,3 +71,10 @@ ctest --test-dir <build-directory> -R '^collection_tests_static_multimap_' --out
 ```
 
 性能测试使用仓库现有框架和官方附件规模；两个时间字段都来自同步调用的 Host 墙钟计时，不是独立测得的核函数执行时间。设备性能分析使用官方 msopprof，并与端到端耗时分别解释。
+
+启用 `BUILD_PERFORMANCE` 后，可运行查询缓冲复用基准，检查结果一致性、显式设备分配/释放次数及 Host 耗时：
+
+```bash
+cmake --build <build-directory> --target multimap_query_scratch
+<build-directory>/tests/multimap_query_scratch 1000 0 --expect-reuse
+```

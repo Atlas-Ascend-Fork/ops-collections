@@ -4,6 +4,7 @@
  * See LICENSE in the root of the software repository for the full text.
  */
 #include "common/static_multimap_test_common.h"
+#include <array>
 
 namespace aclco::detail::multimap {
 // This test-only access object leaves the public constructor unchanged.
@@ -18,8 +19,82 @@ struct StaticMultimapTestAccess {
     {
         return map.Get().indices.Data() == nullptr;
     }
+    template <class T>
+    static std::vector<void*> ScratchPointers(StaticMultimap<T, T> const& map)
+    {
+        auto const& scratch = map.Get().queryScratch;
+        std::vector<void*> result{scratch.counts.Data(), scratch.offsets.Data(), scratch.matches.Data()};
+        for (auto const& buffer : scratch.workspace) result.push_back(buffer.Data());
+        return result;
+    }
+
 };
 } // namespace aclco::detail::multimap
+
+namespace {
+template <class T>
+void CheckScratchQueries(aclco::StaticMultimap<T, T>& map, std::size_t n, aclrtStream queryStream, bool empty)
+{
+    using namespace aclco::test::static_multimap;
+    std::vector<T> queries(n, T{2});
+    auto keys = UploadBuffer(queries, queryStream);
+    std::size_t total = empty ? 0 : n * 3;
+    aclco::test::DeviceBuffer<T> outKeys(total), outValues(total);
+    REQUIRE(map.Count(keys.Data(), aclco::Extent<std::size_t>{n}, queryStream) == total);
+    REQUIRE(map.Retrieve(keys.Data(), aclco::Extent<std::size_t>{n}, outKeys.Data(), outValues.Data(),
+                         aclco::Extent<std::size_t>{total}, queryStream) == total);
+    if (!empty) {
+        auto values = outValues.CopyToHost(queryStream);
+        REQUIRE(outKeys.CopyToHost(queryStream) == std::vector<T>(total, T{2}));
+        for (std::size_t i = 0; i < values.size(); ++i)
+            if (values[i] != T(2049 + i % 3)) FAIL("retrieve ordering or cached counts are stale");
+    }
+}
+} // namespace
+
+TEMPLATE_TEST_CASE("static_multimap query scratch reuse and growth", "[static_multimap][scratch]", int32_t, int64_t)
+{
+    using T = TestType;
+    using namespace aclco::test::static_multimap;
+    using Access = aclco::detail::multimap::StaticMultimapTestAccess;
+    TestStream context;
+    aclco::test::AclStreamGuard alternate;
+    auto stream = context.stream;
+    bool direct = GENERATE(false, true);
+    auto map = direct ? Access::Direct<T>(64, EmptyKey<T>(), EmptyValue<T>(), stream)
+                      : MakeMultimap<T, T>(64, stream);
+    auto pairs = MakePairs<T, T>(4, 3);
+    auto input = InsertPairs(map, pairs, stream);
+    auto initial = Access::ScratchPointers(map);
+    REQUIRE(map.Count(nullptr, aclco::Extent<std::size_t>{0}, stream) == 0);
+    REQUIRE(Access::ScratchPointers(map) == initial);
+    CheckScratchQueries(map, 66049, stream, false); // Recursive Prefix workspace, including a tail.
+    auto warm = Access::ScratchPointers(map);
+    CheckScratchQueries(map, 66049, alternate.stream, false); // Serialized calls may use another stream.
+    REQUIRE(Access::ScratchPointers(map) == warm);
+    CheckScratchQueries(map, 1, stream, false);
+    REQUIRE(Access::ScratchPointers(map) == warm);
+    CheckScratchQueries(map, 140003, stream, false);
+    auto grown = Access::ScratchPointers(map);
+    REQUIRE(grown != warm);
+    CheckScratchQueries(map, 66049, stream, false);
+    REQUIRE(Access::ScratchPointers(map) == grown);
+    // Capacity failure must not leave pending work or alter caller output.
+    std::vector<T> query{T{2}};
+    auto key = UploadBuffer(query, stream);
+    REQUIRE_THROWS_AS(map.Retrieve(key.Data(), aclco::Extent<std::size_t>{1}, nullptr, nullptr,
+                                  aclco::Extent<std::size_t>{2}, stream), std::length_error);
+    REQUIRE(map.Count(key.Data(), aclco::Extent<std::size_t>{1}, alternate.stream) == 3);
+    auto moved = std::move(map);
+    REQUIRE(Access::ScratchPointers(moved) == grown);
+    moved.Clear(stream);
+    REQUIRE(moved.Count(key.Data(), aclco::Extent<std::size_t>{1}, stream) == 0);
+    REQUIRE(moved.Retrieve(key.Data(), aclco::Extent<std::size_t>{1}, nullptr, nullptr,
+                           aclco::Extent<std::size_t>{0}, stream) == 0);
+    REQUIRE(Access::ScratchPointers(moved) == grown);
+    auto reinserted = InsertPairs(moved, pairs, alternate.stream);
+    REQUIRE(moved.Count(key.Data(), aclco::Extent<std::size_t>{1}, alternate.stream) == 3);
+}
 
 namespace {
 struct Nonzero {
@@ -164,13 +239,16 @@ void CheckConditionalPairPacking(Device<GenericPair>& table, Device<GenericPair>
     const std::vector<uint64_t> offsets{0};
     Device<uint32_t> selection(capacity);
     Device<uint64_t> ranks(1);
+    Device<uint64_t> selectedRanks(capacity);
+    const std::vector<uint64_t> positions{0, 1, 1, 2, 2, 3, 3};
     selection.CopyFromHostAsync(stencil.data(), capacity, stream);
     ranks.CopyFromHostAsync(offsets.data(), 1, stream);
+    selectedRanks.CopyFromHostAsync(positions.data(), capacity, stream);
     failed.MemsetZero(stream);
     Clear<uint32_t, uint32_t><<<1, nullptr, stream>>>(table.Data(), nullptr, capacity, empty, empty);
     Insert<uint32_t, uint32_t, uint32_t, Nonzero, true><<<1, nullptr, stream>>>(
         table.Data(), nullptr, capacity, empty, empty, input.Data(), selection.Data(), capacity,
-        ranks.Data(), 4, 0, failed.Data());
+        ranks.Data(), selectedRanks.Data(), 4, 0, failed.Data());
     REQUIRE(failed.CopyToHost(stream)[0] == 0);
     std::vector<GenericPair> expected;
     for (std::size_t i = 0; i < capacity; ++i) {
@@ -207,12 +285,12 @@ TEST_CASE("static_multimap direct kernel packs generic eight-byte pairs",
     Clear<T, T><<<1, nullptr, stream>>>(table.Data(), nullptr, capacity, emptyKey, emptyValue);
     Insert<T, T, uint32_t, SelectAll, false><<<1, nullptr, stream>>>(
         table.Data(), nullptr, capacity, emptyKey, emptyValue, input.Data(), nullptr, capacity,
-        nullptr, capacity, 0, failed.Data());
+        nullptr, nullptr, capacity, 0, failed.Data());
     REQUIRE(failed.CopyToHost(stream)[0] == 0);
     CheckPackedPairs(table.CopyToHost(stream), pairs);
     Insert<T, T, uint32_t, SelectAll, false><<<1, nullptr, stream>>>(
         table.Data(), nullptr, capacity, emptyKey, emptyValue, input.Data(), nullptr, 1,
-        nullptr, 1, 0, failed.Data());
+        nullptr, nullptr, 1, 0, failed.Data());
     REQUIRE(failed.CopyToHost(stream)[0] == 1);
 
     CheckConditionalPairPacking(table, input, failed, pairs, stream);

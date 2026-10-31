@@ -118,6 +118,13 @@ endif()
 
 
 if(BUILD_PERFORMANCE)
+  add_executable(multimap_query_scratch performance/static_multimap/perf_count.cpp)
+  target_compile_definitions(multimap_query_scratch PRIVATE ACLCO_MULTIMAP_SCRATCH_BENCH)
+  target_include_directories(multimap_query_scratch PRIVATE ${PROJECT_SOURCE_DIR})
+  target_link_libraries(multimap_query_scratch PRIVATE COLLECTION)
+  target_link_options(multimap_query_scratch PRIVATE "-Wl,--wrap=aclrtMalloc" "-Wl,--wrap=aclrtFree")
+  apply_ascend_config(multimap_query_scratch)
+
   set(PERF_MAIN_SRC ${CMAKE_CURRENT_SOURCE_DIR}/performance/main.cpp)
 
   # 收集所有性能测试用例文件

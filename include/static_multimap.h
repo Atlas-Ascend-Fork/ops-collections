@@ -29,16 +29,34 @@ inline uint32_t Blocks()
 inline std::size_t Chunks(std::size_t n) { return (n - 1) / CHUNK + 1; }
 
 // Workspace ownership outlives every queued kernel, including recursive scans.
-inline void Prefix(uint64_t* values, std::size_t n, aclrtStream stream, std::vector<Buffer<uint64_t>>& workspace)
+inline void PreparePrefix(std::size_t n, std::vector<Buffer<uint64_t>>& workspace)
+{
+    for (std::size_t level = 0; n; ++level) {
+        auto chunks = Chunks(n);
+        if (level == workspace.size()) workspace.emplace_back();
+        workspace[level].Reserve(chunks + 1);
+        if (chunks == 1) break;
+        n = chunks;
+    }
+}
+
+inline void PrefixPrepared(uint64_t* values, std::size_t n, aclrtStream stream,
+                           std::vector<Buffer<uint64_t>>& workspace, std::size_t level)
 {
     auto chunks = Chunks(n);
-    workspace.emplace_back(chunks + 1);
-    auto sums = workspace.back().Data();
+    auto sums = workspace[level].Data();
     Scan<><<<Blocks(), 0, stream>>>(values, sums, n);
     if (chunks > 1) {
-        Prefix(sums, chunks, stream, workspace);
+        PrefixPrepared(sums, chunks, stream, workspace, level + 1);
     }
     Offset<><<<Blocks(), 0, stream>>>(values, sums, n, chunks);
+}
+
+inline void Prefix(uint64_t* values, std::size_t n, aclrtStream stream, std::vector<Buffer<uint64_t>>& workspace)
+{
+    if (!n) return;
+    PreparePrefix(n, workspace);
+    PrefixPrepared(values, n, stream, workspace, 0);
 }
 } // namespace detail::multimap
 
@@ -58,6 +76,37 @@ class StaticMultimap {
     static_assert((std::is_same_v<Key, int32_t> || std::is_same_v<Key, int64_t>) &&
                       (std::is_same_v<Value, int32_t> || std::is_same_v<Value, int64_t>),
                   "StaticMultimap supports signed I32/I64 keys and values");
+    struct QueryScratch {
+        detail::multimap::Buffer<uint64_t> counts, offsets;
+        detail::multimap::Buffer<detail::multimap::RetrievalMatch<Value>> matches;
+        std::vector<detail::multimap::Buffer<uint64_t>> workspace;
+        aclrtStream pendingStream = nullptr;
+        bool pending = false;
+
+        void Wait()
+        {
+            if (pending) {
+                detail::multimap::Sync(pendingStream);
+                pending = false;
+            }
+        }
+        void Begin(aclrtStream stream) { pendingStream = stream; pending = true; }
+        void Prepare(std::size_t n, std::size_t chunks, bool retrieve)
+        {
+            Wait();
+            counts.Reserve(retrieve ? n : chunks + 1);
+            if (retrieve) {
+                offsets.Reserve(chunks + 1);
+                matches.Reserve(n);
+            }
+            detail::multimap::PreparePrefix(chunks, workspace);
+        }
+        ~QueryScratch()
+        {
+            // On an exceptional exit, scratch and table must outlive queued work.
+            if (pending) (void)aclrtSynchronizeStream(pendingStream);
+        }
+    };
     struct State {
         std::size_t capacity;
         std::size_t size = 0;
@@ -66,6 +115,8 @@ class StaticMultimap {
         detail::multimap::Buffer<Pair<Key, Value>> table;
         detail::multimap::Buffer<uint64_t> indices;
         detail::multimap::Buffer<uint32_t> status;
+        // Destroyed before table/indices; externally serialized const queries reuse it.
+        mutable QueryScratch queryScratch;
         State(std::size_t n, Key k, Value v, detail::multimap::StorageMode mode)
             : capacity(n),
               emptyKey(k),
@@ -96,6 +147,7 @@ class StaticMultimap {
         if (!state_) {
             throw std::logic_error("StaticMultimap: moved-from object");
         }
+        state_->queryScratch.Wait();
         return *state_;
     }
     void CheckCount(std::size_t n) const
@@ -320,12 +372,14 @@ public:
             return 0;
         }
         SizeType n = count;
-        mm::Buffer<uint64_t> counts(chunks + 1);
-        std::vector<mm::Buffer<uint64_t>> workspace;
+        auto& scratch = s.queryScratch;
+        scratch.Prepare(n, chunks, false);
+        auto& counts = scratch.counts;
+        scratch.Begin(stream);
         mm::Count<Key, Value><<<mm::Blocks(), 0, stream>>>(s.table.Data(), s.indices.Data(), s.capacity, s.emptyKey,
                                                            s.emptyValue, static_cast<Key*>(keys), n, counts.Data());
-        mm::Prefix(counts.Data(), chunks, stream, workspace);
-        mm::Sync(stream);
+        mm::PrefixPrepared(counts.Data(), chunks, stream, scratch.workspace, 0);
+        scratch.Wait();
         return mm::Read(counts.Data() + chunks);
     }
     /**
@@ -344,15 +398,17 @@ public:
             return 0;
         }
         SizeType n = count;
-        mm::Buffer<uint64_t> counts(n);
-        mm::Buffer<uint64_t> offsets(chunks + 1);
-        mm::Buffer<mm::RetrievalMatch<Value>> matches(n);
-        std::vector<mm::Buffer<uint64_t>> workspace;
+        auto& scratch = s.queryScratch;
+        scratch.Prepare(n, chunks, true);
+        auto& counts = scratch.counts;
+        auto& offsets = scratch.offsets;
+        auto& matches = scratch.matches;
+        scratch.Begin(stream);
         mm::RetrieveCounts<Key, Value><<<mm::Blocks(), 0, stream>>>(s.table.Data(), s.indices.Data(), s.capacity,
                                                                     s.emptyKey, s.emptyValue, static_cast<Key*>(keys),
                                                                     n, counts.Data(), offsets.Data(), matches.Data());
-        mm::Prefix(offsets.Data(), chunks, stream, workspace);
-        mm::Sync(stream);
+        mm::PrefixPrepared(offsets.Data(), chunks, stream, scratch.workspace, 0);
+        scratch.Wait();
         auto total = mm::Read(offsets.Data() + chunks);
         if (total > SizeType(outputCapacity)) {
             throw std::length_error("StaticMultimap: output capacity is insufficient");
@@ -364,10 +420,11 @@ public:
         mm::RequirePointer(valueOut);
         mm::Bytes<Key>(total);
         mm::Bytes<Value>(total);
+        scratch.Begin(stream);
         mm::Retrieve<Key, Value><<<mm::Blocks(), 0, stream>>>(
             s.table.Data(), s.indices.Data(), s.capacity, s.emptyKey, s.emptyValue, static_cast<Key*>(keys), n,
             counts.Data(), offsets.Data(), matches.Data(), static_cast<Key*>(probeOut), static_cast<Value*>(valueOut));
-        mm::Sync(stream);
+        scratch.Wait();
         return total;
     }
     /**
