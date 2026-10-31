@@ -19,6 +19,7 @@
 #include "tests/common/acl_env.h"
 #include "tests/common/device_buffer.h"
 #include "tests/common/map_factory.h"
+#include "tests/common/set_factory.h"
 #include "tests/common/generators.h"
 #include "tests/common/test_print.h"
 
@@ -327,3 +328,121 @@ TEMPLATE_TEST_CASE_SIG(
 }
 
 
+
+namespace
+{
+template <typename Key, typename Value, int BucketSize = 1>
+void VerifyMapLookup(aclrtStream stream)
+{
+  using Probe = aclco::test::map_factory::LinearProbing<Key>;
+  auto sent = aclco::test::MakeDefaultSentinels<Key, Value>();
+  constexpr std::size_t kCapacity = 1000;
+  constexpr std::size_t kInserted = 400;
+  constexpr std::size_t kQueries = 800;
+
+  auto map = aclco::test::map_factory::MakeStaticMap<Key, Value, BucketSize, Probe>(kCapacity, sent, stream);
+
+  std::vector<Pair<Key, Value>> pairs;
+  for (std::size_t i = 1; i <= kInserted; ++i) {
+    pairs.push_back(Pair<Key, Value>{static_cast<Key>(i), static_cast<Value>(i * 17 + 1)});
+  }
+  aclco::test::DeviceBuffer<Pair<Key, Value>> dPairs(pairs.size());
+  dPairs.CopyFromHostAsync(pairs.data(), pairs.size(), stream);
+  REQUIRE(map.Insert(dPairs.Data(), aclco::Extent<std::size_t>(pairs.size()), stream) == 0);
+
+  std::vector<Key> keys(kQueries);
+  for (std::size_t i = 0; i < keys.size(); ++i) {
+    keys[i] = static_cast<Key>(i + 1);
+  }
+  aclco::test::DeviceBuffer<Key> dKeys(keys.size());
+  aclco::test::DeviceBuffer<Value> dValues(keys.size());
+  aclco::test::DeviceBuffer<uint8_t> dFlags(keys.size());
+  dKeys.CopyFromHostAsync(keys.data(), keys.size(), stream);
+
+  map.FindAsync(dKeys.Data(), dValues.Data(), aclco::Extent<std::size_t>(keys.size()), stream);
+  auto values = dValues.CopyToHost(stream);
+  for (std::size_t i = 0; i < keys.size(); ++i) {
+    const Value expected = (i < kInserted) ? static_cast<Value>(keys[i] * 17 + 1) : sent.emptyValue;
+    CAPTURE(i, keys[i]);
+    REQUIRE(values[i] == expected);
+  }
+
+  map.ContainsAsync(dKeys.Data(), dFlags.Data(), aclco::Extent<std::size_t>(keys.size()), stream);
+  auto flags = dFlags.CopyToHost(stream);
+  for (std::size_t i = 0; i < keys.size(); ++i) {
+    CAPTURE(i, keys[i]);
+    REQUIRE(static_cast<bool>(flags[i]) == (i < kInserted));
+  }
+
+  REQUIRE(map.Count(dKeys.Data(), aclco::Extent<std::size_t>(keys.size()), stream) == kInserted);
+}
+
+template <typename Key, int BucketSize = 1>
+void VerifySetLookup(aclrtStream stream)
+{
+  using Probe = aclco::test::set_factory::LinearProbing<Key>;
+  constexpr std::size_t kCapacity = 1000;
+  constexpr std::size_t kInserted = 400;
+  constexpr std::size_t kQueries = 800;
+  const Key emptyKey = aclco::test::DefaultEmptyValue<Key>();
+
+  auto set = aclco::test::set_factory::MakeStaticSet<Key, BucketSize, Probe>(kCapacity, emptyKey, stream);
+
+  std::vector<Key> keys(kQueries);
+  for (std::size_t i = 0; i < keys.size(); ++i) {
+    keys[i] = static_cast<Key>(i + 1);
+  }
+  aclco::test::DeviceBuffer<Key> dKeys(keys.size());
+  aclco::test::DeviceBuffer<Key> dInserted(kInserted);
+  dKeys.CopyFromHostAsync(keys.data(), keys.size(), stream);
+  dInserted.CopyFromHostAsync(keys.data(), kInserted, stream);
+  REQUIRE(set.Insert(dInserted.Data(), aclco::Extent<std::size_t>(kInserted), stream) == 0);
+
+  aclco::test::DeviceBuffer<Key> dValues(kQueries);
+  aclco::test::DeviceBuffer<uint8_t> dFlags(kQueries);
+  set.FindAsync(dKeys.Data(), dValues.Data(), aclco::Extent<std::size_t>(kQueries), stream);
+  auto values = dValues.CopyToHost(stream);
+  for (std::size_t i = 0; i < keys.size(); ++i) {
+    CAPTURE(i, keys[i]);
+    REQUIRE(values[i] == ((i < kInserted) ? keys[i] : emptyKey));
+  }
+
+  set.Contains(dKeys.Data(), dFlags.Data(), aclco::Extent<std::size_t>(kQueries), stream);
+  auto flags = dFlags.CopyToHost(stream);
+  for (std::size_t i = 0; i < keys.size(); ++i) {
+    CAPTURE(i, keys[i]);
+    REQUIRE(static_cast<bool>(flags[i]) == (i < kInserted));
+  }
+
+  REQUIRE(set.Count(dKeys.Data(), aclco::Extent<std::size_t>(kQueries), stream) == kInserted);
+}
+}  // namespace
+
+TEST_CASE("key-only lookup keeps map payloads and scalar set queries",
+          "[static_map][static_set][find][contains][count][regression]")
+{
+  aclco::test::AclGlobalGuard g_acl;
+  aclco::test::AclStreamGuard sg;
+  auto stream = sg.stream;
+
+  // Single-slot buckets: the deferred-payload path is compiled out here.
+  REQUIRE_NOTHROW(VerifyMapLookup<uint32_t, uint32_t>(stream));
+  REQUIRE_NOTHROW(VerifyMapLookup<uint32_t, uint64_t>(stream));
+  REQUIRE_NOTHROW(VerifyMapLookup<uint64_t, uint64_t>(stream));
+  REQUIRE_NOTHROW(VerifySetLookup<uint32_t>(stream));
+  REQUIRE_NOTHROW(VerifySetLookup<uint64_t>(stream));
+
+  // Five-slot buckets: Map<uint32_t, uint64_t> is the one combination here that takes the
+  // deferred-payload path, so it must read the key and the payload from the same slot. The
+  // others stay on the single-load path and guard against the condition widening by mistake.
+  REQUIRE_NOTHROW((VerifyMapLookup<uint32_t, uint64_t, 5>(stream)));
+  REQUIRE_NOTHROW((VerifyMapLookup<uint32_t, uint32_t, 5>(stream)));
+  REQUIRE_NOTHROW((VerifyMapLookup<uint64_t, uint64_t, 5>(stream)));
+  REQUIRE_NOTHROW((VerifySetLookup<uint32_t, 5>(stream)));
+  REQUIRE_NOTHROW((VerifySetLookup<uint64_t, 5>(stream)));
+
+  // Three-slot buckets are excluded from the deferred path; keep them covered so a future
+  // change to the bucket threshold shows up as a test failure rather than silently.
+  REQUIRE_NOTHROW((VerifyMapLookup<uint32_t, uint64_t, 3>(stream)));
+  REQUIRE_NOTHROW((VerifySetLookup<uint32_t, 3>(stream)));
+}

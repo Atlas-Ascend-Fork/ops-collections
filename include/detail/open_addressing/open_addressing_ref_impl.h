@@ -37,6 +37,17 @@ public:
 
     static constexpr auto bucketSize = StorageRefType::bucketSize;
     static constexpr bool hasPayload = isPairV<ValueType>;
+    // Probing reads only the key and fetches the payload once a key matches. Enabled only for the
+    // configurations measured faster on Ascend950PR: buckets of four or more slots, a key narrower
+    // than one 8-byte word, and a slot wider than one. Measured 2.2%-10.8% faster across load
+    // factors 0.5/0.9, hit rates 0%/50%/100%, tables from 4 million to 80 million keys and query
+    // batches from 500 thousand to 40 million. Three-slot buckets are excluded: their gain is not
+    // reproducible at small batches with high hit rates. Every excluded configuration compiles to
+    // code byte-identical to the previous single-load path. Why this is faster is not claimed here:
+    // bucket starts are not aligned to the access granularity, so the narrower read is not shown to
+    // cut per-probe traffic.
+    static constexpr bool deferPayloadLoad =
+        hasPayload && bucketSize > 3 && sizeof(ValueType) > sizeof(uint64_t) && sizeof(KeyType) < sizeof(uint64_t);
     using PayloadType = PayloadTypeT<ValueType>;
 
     COLLECTION_HOST_DEVICE explicit constexpr OpenAddressingRefImpl(ValueType emptySlotValue, KeyEqual const& predicate,
@@ -536,13 +547,26 @@ private:
         while (true) {
             __gm__ auto* bucketSlotsAddr = tableHandle + *probingIter;
             for (auto i = 0; i < bucketSize; i++) {
-                auto const slotContent = *(bucketSlotsAddr + i);
-                auto const slotKey = this->ExtractKey(slotContent);
-                if (predicate_.EqualTo(slotKey, emptyKey) == EqualResult::EQUAL) {
-                    return {ExtractValue(emptySlotValue_), false};
-                }
-                if (predicate_.EqualTo(slotKey, key) == EqualResult::EQUAL) {
-                    return {ExtractValue(slotContent), true};
+                auto const slotPtr = bucketSlotsAddr + i;
+                if constexpr (deferPayloadLoad) {
+                    // Wide slot: read only the key while probing, fetch the payload once the key matches.
+                    auto const slotKey = slotPtr->first;
+                    if (predicate_.EqualTo(slotKey, emptyKey) == EqualResult::EQUAL) {
+                        return {ExtractValue(emptySlotValue_), false};
+                    }
+                    if (predicate_.EqualTo(slotKey, key) == EqualResult::EQUAL) {
+                        return {ExtractValue(*slotPtr), true};
+                    }
+                } else {
+                    // Narrow slot: a single load already carries key and payload, so reuse it.
+                    auto const slotContent = *slotPtr;
+                    auto const slotKey = this->ExtractKey(slotContent);
+                    if (predicate_.EqualTo(slotKey, emptyKey) == EqualResult::EQUAL) {
+                        return {ExtractValue(emptySlotValue_), false};
+                    }
+                    if (predicate_.EqualTo(slotKey, key) == EqualResult::EQUAL) {
+                        return {ExtractValue(slotContent), true};
+                    }
                 }
             }
             ++probingIter;
