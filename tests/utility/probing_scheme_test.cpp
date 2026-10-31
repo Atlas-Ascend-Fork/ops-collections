@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <numeric>
+#include <limits>
 
 #include "probing_scheme.h"
 #include "hash_functions.h"
@@ -175,4 +176,36 @@ TEST_CASE("DoubleHashing can be reconstructed from HashFunction", "[probing][dou
 
     REQUIRE(std::get<0>(hashes)(5) == 8);
     REQUIRE(std::get<1>(hashes)(5) == 16);
+}
+
+TEMPLATE_TEST_CASE("ProbingIterator wraps without overflowing", "[probing][boundary]",
+                   std::uint32_t, std::uint64_t)
+{
+    using T = TestType;
+    for (T bound = 1; bound <= 24; ++bound) {
+        for (T step = 1; step <= bound; ++step) {
+            for (T start = 0; start < bound; ++start) {
+                aclco::detail::ProbingIterator<T> it(start, step, bound);
+                T expected = start;
+                for (T i = 0; i < 2 * bound; ++i) {
+                    REQUIRE(*(it++) == expected);
+                    expected = (expected + step) % bound;
+                    REQUIRE(*it == expected);
+                }
+            }
+        }
+    }
+    auto const max = std::numeric_limits<T>::max();
+    for (T bound : {T(max / 2 + 1), T(max - 1), max}) {
+        for (T step : {T(1), T(bound / 2), T(bound - 1), bound}) {
+            for (T start : {T(0), T(bound / 2), T(bound - 1)}) {
+                aclco::detail::ProbingIterator<T> it(start, step, bound);
+                auto expected = static_cast<unsigned __int128>(start);
+                for (int i = 0; i < 32; ++i) {
+                    expected = (expected + step) % bound;
+                    REQUIRE(*++it == static_cast<T>(expected));
+                }
+            }
+        }
+    }
 }

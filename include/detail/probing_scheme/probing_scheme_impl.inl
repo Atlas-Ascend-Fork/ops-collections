@@ -76,7 +76,10 @@ class ProbingIterator {
   COLLECTION_HOST_DEVICE constexpr auto operator++()
   {
 
-    idx_ = (idx_ + probeStep_) % upperBound_;
+    // Valid iterators have idx_ < upperBound_ and probeStep_ <= upperBound_.
+    // Subtract before adding so wrapping also works near the integer limit.
+    auto const remaining = upperBound_ - probeStep_;
+    idx_ = idx_ >= remaining ? idx_ - remaining : idx_ + probeStep_;
     return *this;
   }
 
