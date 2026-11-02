@@ -30,24 +30,40 @@ inline void CheckAcl(uint32_t ret, const char* what)
   }
 }
 
+// Catch2 invokes each generated case/section separately. Keep the runtime alive
+// across those invocations: repeatedly resetting a device waits for TsdClose and
+// can dominate or stall otherwise completed tests. Streams and allocations still
+// retain their per-test lifetimes; the device is reset once at process exit.
+struct AclProcessSession
+{
+  int32_t device;
+
+  AclProcessSession() : device(GetDeviceId())
+  {
+    CheckAcl(aclInit(nullptr), "aclInit");
+    CheckAcl(aclrtSetDevice(device), "aclrtSetDevice");
+  }
+
+  ~AclProcessSession()
+  {
+    (void)aclrtResetDevice(device);
+    (void)aclFinalize();
+  }
+
+  AclProcessSession(AclProcessSession const&) = delete;
+  AclProcessSession& operator=(AclProcessSession const&) = delete;
+};
+
 struct AclGlobalGuard
 {
   AclGlobalGuard()
   {
-    // ACL can be initialized multiple times in some environments; treat non-success as fatal.
-    CheckAcl(aclInit(nullptr), "aclInit");
-    int32_t dev = GetDeviceId();
-    CheckAcl(aclrtSetDevice(dev), "aclrtSetDevice");
+    static AclProcessSession session;
   }
 
-  ~AclGlobalGuard()
-  {
-    (void)aclrtResetDevice(GetDeviceId());
-    (void)aclFinalize();
-  }
-
-  AclGlobalGuard(const AclGlobalGuard&) = delete;
-  AclGlobalGuard& operator=(const AclGlobalGuard&) = delete;
+  ~AclGlobalGuard() = default;
+  AclGlobalGuard(AclGlobalGuard const&) = delete;
+  AclGlobalGuard& operator=(AclGlobalGuard const&) = delete;
 };
 
 struct AclStreamGuard

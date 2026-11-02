@@ -93,7 +93,7 @@ public:
 
         auto oldKey = AtomicCasWrap((__gm__ KeyType*)&(address->first), expectedKey, desire.first);
 
-        if (this->predicate_.EqualTo(oldKey, expectedKey) == EqualResult::EQUAL) {
+        if (predicate_.IsSentinelValue(oldKey, expectedKey)) {
             auto oldValue = AtomicCasWrap((__gm__ MappedType*)&(address->second), expectedPayload, desire.second);
             return InsertResult::SUCCESS;
         } else if (this->predicate_.EqualTo(oldKey, desire.first) == EqualResult::EQUAL) {
@@ -115,7 +115,7 @@ public:
         auto oldSlot = AtomicCasWrap(slotPtr, packedExpected, packedDesired);
         auto* oldSlotPtr = reinterpret_cast<Value*>(&oldSlot);
 
-        if (this->predicate_.EqualTo(this->ExtractKey(expected), this->ExtractKey(*oldSlotPtr)) == EqualResult::EQUAL) {
+        if (oldSlot == packedExpected) {
             return InsertResult::SUCCESS;
         } else {
             if (this->predicate_.EqualTo(this->ExtractKey(desired), this->ExtractKey(*oldSlotPtr)) ==
@@ -131,7 +131,7 @@ public:
     {
         auto oldValue = AtomicCasWrap(address, expected, desired);
 
-        if (this->predicate_.EqualTo(this->ExtractKey(expected), this->ExtractKey(oldValue)) == EqualResult::EQUAL) {
+        if (predicate_.IsSentinelValue(this->ExtractKey(expected), this->ExtractKey(oldValue))) {
             return InsertResult::SUCCESS;
         } else {
             if (this->predicate_.EqualTo(this->ExtractKey(desired), this->ExtractKey(oldValue)) == EqualResult::EQUAL) {
@@ -151,7 +151,7 @@ public:
         auto desiredKey = desired.first;
         auto oldKey = AtomicCasWrap(keyAddr, expectedKey, desiredKey);
 
-        if (oldKey == expectedKey) {
+        if (predicate_.IsSentinelValue(oldKey, expectedKey)) {
             auto const desiredValue = desired.second;
             address->second = desiredValue;
             return InsertResult::SUCCESS;
@@ -225,7 +225,7 @@ public:
         auto oldSlot = AtomicCasWrap(slotPtr, packedExpected, packedDesired);
         auto* oldSlotPtr = reinterpret_cast<Value*>(&oldSlot);
 
-        if (this->predicate_.EqualTo(this->ExtractKey(expected), this->ExtractKey(*oldSlotPtr)) == EqualResult::EQUAL) {
+        if (oldSlot == packedExpected) {
             return InsertResult::SUCCESS;
         } else {
             if (this->predicate_.EqualTo(this->ExtractKey(desired), this->ExtractKey(*oldSlotPtr)) ==
@@ -246,7 +246,7 @@ public:
         auto desiredKey = desired.first;
         auto oldKey = AtomicCasWrap(keyAddr, expectedKey, desiredKey);
 
-        if (oldKey == expectedKey) {
+        if (predicate_.IsSentinelValue(oldKey, expectedKey)) {
             address->second = desired.second;
             return InsertResult::SUCCESS;
         }
@@ -321,8 +321,8 @@ public:
 
         auto probingIter = probingScheme_.template MakeIterator<bucketSize>(key, storageRef_.Capacity());
         auto const initIdx = *probingIter;
-        bool const hasTombstone = predicate_.EqualTo(this->ExtractKey(erasedSlotValue),
-                                                     this->ExtractKey(emptySlotValue_)) != EqualResult::EQUAL;
+        bool const hasTombstone = !predicate_.IsSentinelValue(this->ExtractKey(erasedSlotValue),
+                                                          this->ExtractKey(emptySlotValue_));
 
         while (true) {
             __gm__ auto* bucketSlotsAddr = tableHandle + *probingIter;
@@ -371,7 +371,7 @@ public:
             for (auto i = 0; i < bucketSize; i++) {
                 __gm__ auto* slotAddr = bucketSlotsAddr + i;
                 auto const slotKey = this->ExtractKey(*slotAddr);
-                if (predicate_.EqualTo(slotKey, emptyKey) == EqualResult::EQUAL) {
+                if (predicate_.IsSentinelValue(slotKey, emptyKey)) {
                     return false;
                 }
                 if (predicate_.EqualTo(slotKey, key) == EqualResult::EQUAL) {
@@ -551,7 +551,7 @@ private:
                 if constexpr (deferPayloadLoad) {
                     // Wide slot: read only the key while probing, fetch the payload once the key matches.
                     auto const slotKey = slotPtr->first;
-                    if (predicate_.EqualTo(slotKey, emptyKey) == EqualResult::EQUAL) {
+                    if (predicate_.IsSentinelValue(slotKey, emptyKey)) {
                         return {ExtractValue(emptySlotValue_), false};
                     }
                     if (predicate_.EqualTo(slotKey, key) == EqualResult::EQUAL) {
@@ -561,7 +561,7 @@ private:
                     // Narrow slot: a single load already carries key and payload, so reuse it.
                     auto const slotContent = *slotPtr;
                     auto const slotKey = this->ExtractKey(slotContent);
-                    if (predicate_.EqualTo(slotKey, emptyKey) == EqualResult::EQUAL) {
+                    if (predicate_.IsSentinelValue(slotKey, emptyKey)) {
                         return {ExtractValue(emptySlotValue_), false};
                     }
                     if (predicate_.EqualTo(slotKey, key) == EqualResult::EQUAL) {

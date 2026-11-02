@@ -254,12 +254,12 @@ COLLECTION_HOST_DEVICE void StaticCast(T& out, uint64_t val)
 template <>
 struct EqualTo<fp16_t>
 {
-    COLLECTION_SIMT_DEVICE bool operator()(fp16_t const& lhs, fp16_t const& rhs) const noexcept
+    COLLECTION_HOST_DEVICE bool operator()(fp16_t const& lhs, fp16_t const& rhs) const noexcept
     {
         return lhs.val == rhs.val;
     }
 
-    COLLECTION_SIMT_DEVICE bool operator()(uint16_t const& lhs, uint16_t const& rhs) const noexcept
+    COLLECTION_HOST_DEVICE bool operator()(uint16_t const& lhs, uint16_t const& rhs) const noexcept
     {
         return lhs == rhs;
     }

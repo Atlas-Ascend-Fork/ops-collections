@@ -25,6 +25,9 @@ struct IsBitwiseComparable<T, std::enable_if_t<std::has_unique_object_representa
   : TrueType {};
 
 template <typename T>
+struct IsBitwiseComparable<T, std::enable_if_t<std::is_floating_point_v<T>>> : TrueType {};
+
+template <typename T>
 inline constexpr bool isBitwiseComparableV = IsBitwiseComparable<T>::value;
 
 template <std::size_t Size>

@@ -11,6 +11,7 @@
 
 #include <cstdint>
 
+#include "detail/bitwise_compare.h"
 #include "macros.h"
 
 namespace aclco {
@@ -31,13 +32,22 @@ struct EqualWrapper {
     return equal_(lhs, rhs) ? EqualResult::EQUAL : EqualResult::UNEQUAL;
   }
 
+  COLLECTION_HOST_DEVICE constexpr bool IsSentinelValue(T const& value, T const& sentinel) const noexcept
+  {
+    if constexpr (aclco::isBitwiseComparableV<T>) {
+      return detail::BitWiseCompare(value, sentinel);
+    } else {
+      return equal_(value, sentinel);
+    }
+  }
+
   template <IsInsert isInsert>
   COLLECTION_SIMT_DEVICE constexpr EqualResult operator()(T const& lhs, T const& rhs, T const& emptyValue) const noexcept
   {
     if constexpr (isInsert == IsInsert::YES) {
-      return equal_(rhs, emptyValue) ? EqualResult::AVAILABLE : this->EqualTo(lhs, rhs);
+      return IsSentinelValue(rhs, emptyValue) ? EqualResult::AVAILABLE : this->EqualTo(lhs, rhs);
     } else {
-      return equal_(rhs, emptyValue) ? EqualResult::EMPTY : this->EqualTo(lhs, rhs);
+      return IsSentinelValue(rhs, emptyValue) ? EqualResult::EMPTY : this->EqualTo(lhs, rhs);
     }
   }
 

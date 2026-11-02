@@ -346,10 +346,20 @@ class OpenAddressingImpl {
       tileDataNum, coresWithExtra);
   }
 
+  bool CanClearSimd() const
+  {
+    if constexpr (isPairV<ValueType>) {
+      return sizeof(ValueType) <= 8 && sizeof(emptyValue_.first) == sizeof(emptyValue_.second) &&
+             detail::Memcmp(&emptyValue_.first, &emptyValue_.second, sizeof(emptyValue_.first)) == 0;
+    } else {
+      return sizeof(ValueType) <= 8;
+    }
+  }
+
   void Clear(aclrtStream stream)
   {
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
-    if (sizeof(ValueType) <= 8 && storage_.Capacity() > aivCoreNum * BLOCK_SIZE * sizeof(ValueType)) {
+    if (CanClearSimd() && storage_.Capacity() > aivCoreNum * BLOCK_SIZE * sizeof(ValueType)) {
       if constexpr (isPairV<ValueType>) {
         ClearSimd((uint8_t*)storage_.Data(), emptyValue_.first,
                   storage_.Capacity() * sizeof(ValueType) / sizeof(typename ValueType::FirstType), stream);
@@ -368,7 +378,7 @@ class OpenAddressingImpl {
   void ClearAsync(aclrtStream stream) noexcept
   {
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
-     if (sizeof(ValueType) <= 8 && storage_.Capacity() > aivCoreNum * BLOCK_SIZE * sizeof(ValueType)) {
+     if (CanClearSimd() && storage_.Capacity() > aivCoreNum * BLOCK_SIZE * sizeof(ValueType)) {
       if constexpr (isPairV<ValueType>) {
         ClearSimd((uint8_t*)storage_.Data(), emptyValue_.first,
                   storage_.Capacity() * sizeof(ValueType) / sizeof(typename ValueType::FirstType), stream);
