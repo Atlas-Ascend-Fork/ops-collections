@@ -28,6 +28,12 @@ struct StaticMultimapTestAccess {
         return result;
     }
 
+    template <class T>
+    static std::size_t CacheLimit(StaticMultimap<T, T> const& map)
+    {
+        return map.Get().queryScratch.cacheLimit;
+    }
+
 };
 } // namespace aclco::detail::multimap
 
@@ -399,5 +405,89 @@ TEMPLATE_TEST_CASE("static_multimap retrieval spans recursive chunk offsets", "[
                 total);
         REQUIRE(outputKeys.CopyToHost(stream) == expectedKeys);
         REQUIRE(outputValues.CopyToHost(stream) == expectedValues);
+    }
+}
+
+namespace {
+template <class T>
+void CheckBoundedRetrieve(bool direct, std::size_t n, std::size_t multiplicity, aclrtStream stream)
+{
+    using namespace aclco::test::static_multimap;
+    using Access = aclco::detail::multimap::StaticMultimapTestAccess;
+    auto capacity = std::max(std::size_t{64}, multiplicity * 8);
+    auto map = direct ? Access::Direct<T>(capacity, EmptyKey<T>(), EmptyValue<T>(), stream)
+                      : MakeMultimap<T, T>(capacity, stream);
+    auto pairs = MakePairs<T, T>(4, multiplicity);
+    auto input = InsertPairs(map, pairs, stream);
+    std::vector<T> queries(n);
+    for (std::size_t i = 0; i < n; ++i) queries[i] = T(i % 4 + 1);
+    auto keys = UploadBuffer(queries, stream);
+    auto total = n * multiplicity;
+    aclco::test::DeviceBuffer<T> outKeys(total), outValues(total);
+    REQUIRE(map.Retrieve(keys.Data(), aclco::Extent<std::size_t>{n}, outKeys.Data(), outValues.Data(),
+                         aclco::Extent<std::size_t>{total}, stream) == total);
+    REQUIRE(Access::CacheLimit(map) == (multiplicity > 1 && multiplicity <= 1024 ? multiplicity : 0));
+    auto actualKeys = outKeys.CopyToHost(stream), values = outValues.CopyToHost(stream);
+    for (std::size_t i = 0; i < total; ++i)
+        if (actualKeys[i] != queries[i / multiplicity]) FAIL("cached query key order mismatch");
+    for (std::size_t i = 0; i < total; ++i)
+        if (values[i] != pairs[((i / multiplicity) % 4) * multiplicity + i % multiplicity].second) FAIL("cached query value or ordering mismatch");
+    REQUIRE_THROWS_AS(map.Retrieve(keys.Data(), aclco::Extent<std::size_t>{n}, outKeys.Data(), outValues.Data(),
+        aclco::Extent<std::size_t>{total - 1}, stream), std::length_error);
+    REQUIRE(outKeys.CopyToHost(stream) == actualKeys);
+    REQUIRE(outValues.CopyToHost(stream) == values);
+}
+} // namespace
+
+TEMPLATE_TEST_CASE("static_multimap bounded retrieve cache", "[static_multimap][retrieve_cache]", int32_t, int64_t)
+{
+    using namespace aclco::test::static_multimap;
+    TestStream context;
+    auto direct = GENERATE(false, true);
+    for (auto n : {std::size_t{1}, std::size_t{1024}})
+        for (auto m : {std::size_t{1}, std::size_t{8}, std::size_t{64}, std::size_t{1024}, std::size_t{1025}}) {
+            CAPTURE(direct, n, m);
+            CheckBoundedRetrieve<TestType>(direct, n, m, context.stream);
+        }
+    namespace mm = aclco::detail::multimap;
+    REQUIRE(mm::RetrieveCacheLimit<TestType>(100000000, 800000000) == 0);
+    REQUIRE(mm::RetrieveCacheLimit<TestType>(1024, 1024) == 0);
+    REQUIRE(mm::RetrieveCacheLimit<TestType>(1024, 1024 * 64) == 64);
+}
+
+TEMPLATE_TEST_CASE("static_multimap single-query warp ordering", "[static_multimap][retrieve_warp]", int32_t, int64_t)
+{
+    using T = TestType;
+    using namespace aclco::test::static_multimap;
+    TestStream context;
+    for (std::size_t m : {32, 33, 63, 64, 65, 255, 1023, 1024, 1025, 2048, 2049}) {
+        CAPTURE(m);
+        auto map = MakeMultimap<T, T>(2 * m, context.stream);
+        std::vector<aclco::Pair<T, T>> pairs;
+        std::vector<T> expected;
+        for (std::size_t i = 0; i < m; ++i) {
+            T value = T(int(i * 17 % 23) - 11);
+            if (i == 0) value = std::numeric_limits<T>::max();
+            if (i == 1) value = std::numeric_limits<T>::lowest() + 1;
+            pairs.emplace_back(T{-3}, value); expected.push_back(value);
+        }
+        auto input = InsertPairs(map, pairs, context.stream);
+        std::vector<T> query{T{-3}};
+        auto keys = UploadBuffer(query, context.stream);
+        aclco::test::DeviceBuffer<T> outKeys(m), outValues(m);
+        REQUIRE(map.Retrieve(keys.Data(), aclco::Extent<std::size_t>{1}, outKeys.Data(), outValues.Data(),
+            aclco::Extent<std::size_t>{m}, context.stream) == m);
+        std::sort(expected.begin(), expected.end());
+        REQUIRE(outKeys.CopyToHost(context.stream) == std::vector<T>(m, T{-3}));
+        REQUIRE(outValues.CopyToHost(context.stream) == expected);
+        if (m == 33 || m == 1025 || m == 2049) {
+            std::vector<T> sentinels(m, T{-123});
+            outKeys.CopyFromHostAsync(sentinels.data(), m, context.stream);
+            outValues.CopyFromHostAsync(sentinels.data(), m, context.stream);
+            REQUIRE_THROWS_AS(map.Retrieve(keys.Data(), aclco::Extent<std::size_t>{1}, outKeys.Data(), outValues.Data(),
+                aclco::Extent<std::size_t>{m - 1}, context.stream), std::length_error);
+            REQUIRE(outKeys.CopyToHost(context.stream) == sentinels);
+            REQUIRE(outValues.CopyToHost(context.stream) == sentinels);
+        }
     }
 }

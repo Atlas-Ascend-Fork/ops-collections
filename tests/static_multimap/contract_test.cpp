@@ -268,6 +268,13 @@ TEST_CASE("static_multimap I64 hash tags never replace key equality", "[static_m
     REQUIRE(map.Retrieve(keys.Data(), Extent(3), allKeys.Data(), allValues.Data(), Extent(4), stream) == 4);
     REQUIRE(allKeys.CopyToHost(stream) == std::vector<T>{a, a, b, b});
     REQUIRE(allValues.CopyToHost(stream) == std::vector<T>{-7, 41, 17, 19});
+    Device<T> cachedKeys(6), cachedValues(6);
+    REQUIRE(map.Retrieve(keys.Data(), Extent(3), cachedKeys.Data(), cachedValues.Data(), Extent(6), stream) == 4);
+    auto cachedKeyResult = cachedKeys.CopyToHost(stream), cachedValueResult = cachedValues.CopyToHost(stream);
+    cachedKeyResult.resize(4); cachedValueResult.resize(4);
+    REQUIRE(cachedKeyResult == std::vector<T>{a, a, b, b});
+    REQUIRE(cachedValueResult == std::vector<T>{-7, 41, 17, 19});
+
 }
 
 TEST_CASE("static_multimap I32 multiplication hash handles long probe chains", "[static_multimap][contract]")

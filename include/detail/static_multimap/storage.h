@@ -39,12 +39,13 @@ public:
     Buffer() = default;
     explicit Buffer(std::size_t n) { Reserve(n); }
     // Caller must complete any device use before growing a live buffer.
-    void Reserve(std::size_t n)
+    void Reserve(std::size_t n, std::size_t maximumCapacity = std::numeric_limits<std::size_t>::max() / sizeof(T))
     {
         Bytes<T>(n);
         if (n <= capacity_) return;
         auto limit = std::numeric_limits<std::size_t>::max() / sizeof(T);
         auto grown = capacity_ <= limit / 2 ? capacity_ * 2 : n;
+        if (grown > maximumCapacity) grown = maximumCapacity;
         auto capacity = n > grown ? n : grown;
         T* data = nullptr;
         Check(aclrtMalloc(reinterpret_cast<void**>(&data), Bytes<T>(capacity), ACL_MEM_MALLOC_HUGE_FIRST), "allocate");

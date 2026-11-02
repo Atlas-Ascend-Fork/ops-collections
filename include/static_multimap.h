@@ -58,6 +58,19 @@ inline void Prefix(uint64_t* values, std::size_t n, aclrtStream stream, std::vec
     PreparePrefix(n, workspace);
     PrefixPrepared(values, n, stream, workspace, 0);
 }
+constexpr std::size_t retrieveCacheBudget = 32ULL << 20;
+template <class Value>
+inline std::size_t RetrieveCacheLimit(std::size_t n, std::size_t outputCapacity,
+    std::size_t storedSize = std::numeric_limits<std::size_t>::max())
+{
+    if (!n) return 0;
+    Bytes<RetrievalMatch<Value>>(n);
+    constexpr auto maximum = std::numeric_limits<std::size_t>::max() / sizeof(RetrievalMatch<Value>);
+    auto limit = outputCapacity / n;
+    if (limit < 2 || limit >= storedSize || limit > 1024 || limit > retrieveCacheBudget / sizeof(RetrievalMatch<Value>) / n ||
+        limit > (maximum - n) / n) return 0;
+    return limit;
+}
 } // namespace detail::multimap
 
 /**
@@ -82,6 +95,30 @@ class StaticMultimap {
         std::vector<detail::multimap::Buffer<uint64_t>> workspace;
         aclrtStream pendingStream = nullptr;
         bool pending = false;
+        std::size_t cacheLimit = 0;
+
+        void PrepareMatches(std::size_t n, std::size_t outputCapacity, std::size_t storedSize)
+        {
+            using Match = detail::multimap::RetrievalMatch<Value>;
+            detail::multimap::Bytes<Match>(n);
+            constexpr std::size_t budget = detail::multimap::retrieveCacheBudget / sizeof(Match);
+            constexpr auto maximum = std::numeric_limits<std::size_t>::max() / sizeof(Match);
+            cacheLimit = detail::multimap::RetrieveCacheLimit<Value>(n, outputCapacity, storedSize);
+            if (cacheLimit < 2) {
+                cacheLimit = 0;
+                matches.Reserve(n);
+                return;
+            }
+            // Base records and optional values share one allocation. Retain the
+            // usual scratch high-water mark, but cap new cache requests at 32 MiB.
+            auto ceiling = n + std::min(budget, maximum - n);
+            try {
+                matches.Reserve(n + n * cacheLimit, ceiling);
+            } catch (std::runtime_error const&) {
+                cacheLimit = 0;
+                matches.Reserve(n);
+            }
+        }
 
         void Wait()
         {
@@ -91,13 +128,19 @@ class StaticMultimap {
             }
         }
         void Begin(aclrtStream stream) { pendingStream = stream; pending = true; }
-        void Prepare(std::size_t n, std::size_t chunks, bool retrieve)
+        void Prepare(std::size_t n, std::size_t chunks, bool retrieve, std::size_t outputCapacity = 0,
+                     std::size_t storedSize = std::numeric_limits<std::size_t>::max())
         {
             Wait();
             counts.Reserve(retrieve ? n : chunks + 1);
             if (retrieve) {
                 offsets.Reserve(chunks + 1);
-                matches.Reserve(n);
+                if (outputCapacity) {
+                    PrepareMatches(n, outputCapacity, storedSize);
+                } else {
+                    cacheLimit = 0;
+                    matches.Reserve(n);
+                }
             }
             detail::multimap::PreparePrefix(chunks, workspace);
         }
@@ -128,6 +171,76 @@ class StaticMultimap {
               status(1)
         {}
     };
+    COLLECTION_HOST void CountMatches(State& s, Key* keys, std::size_t n, aclrtStream stream) const
+    {
+        namespace mm = detail::multimap;
+        auto& scratch = s.queryScratch;
+        if (scratch.cacheLimit) {
+            mm::RetrieveCountsCached<Key, Value><<<mm::Blocks(), 0, stream>>>(s.table.Data(), s.indices.Data(),
+                s.capacity, s.emptyKey, s.emptyValue, keys, n, scratch.counts.Data(), scratch.offsets.Data(),
+                scratch.matches.Data(), scratch.cacheLimit);
+        } else {
+            mm::RetrieveCounts<Key, Value><<<mm::Blocks(), 0, stream>>>(s.table.Data(), s.indices.Data(),
+                s.capacity, s.emptyKey, s.emptyValue, keys, n, scratch.counts.Data(), scratch.offsets.Data(),
+                scratch.matches.Data());
+        }
+    }
+    COLLECTION_HOST void WriteQueryMatches(State& s, Key* keys, std::size_t n, Key* outputKeys, Value* outputValues,
+                           aclrtStream stream) const
+    {
+        namespace mm = detail::multimap;
+        auto& scratch = s.queryScratch;
+        if (scratch.cacheLimit) {
+            mm::RetrieveCached<Key, Value><<<mm::Blocks(), 0, stream>>>(s.table.Data(), s.indices.Data(), s.capacity,
+                s.emptyKey, s.emptyValue, keys, n, scratch.counts.Data(), scratch.offsets.Data(), scratch.matches.Data(),
+                outputKeys, outputValues, scratch.cacheLimit);
+        } else {
+            mm::Retrieve<Key, Value><<<mm::Blocks(), 0, stream>>>(s.table.Data(), s.indices.Data(), s.capacity,
+                s.emptyKey, s.emptyValue, keys, n, scratch.counts.Data(), scratch.offsets.Data(), scratch.matches.Data(),
+                outputKeys, outputValues);
+        }
+    }
+    template <bool Cached>
+    COLLECTION_HOST std::size_t RetrievePrepared(State& s, void* keys, std::size_t n, std::size_t chunks,
+        void* probeOut, void* valueOut, std::size_t outputCapacity, aclrtStream stream) const
+    {
+        namespace mm = detail::multimap;
+        auto& scratch = s.queryScratch;
+        scratch.Prepare(n, chunks, true, Cached ? outputCapacity : 0, s.size);
+        auto& counts = scratch.counts;
+        auto& offsets = scratch.offsets;
+        auto& matches = scratch.matches;
+        scratch.Begin(stream);
+        if constexpr (Cached) {
+            CountMatches(s, static_cast<Key*>(keys), n, stream);
+        } else {
+            mm::RetrieveCounts<Key, Value><<<mm::Blocks(), 0, stream>>>(s.table.Data(), s.indices.Data(), s.capacity,
+                s.emptyKey, s.emptyValue, static_cast<Key*>(keys), n, counts.Data(), offsets.Data(), matches.Data());
+        }
+        mm::PrefixPrepared(offsets.Data(), chunks, stream, scratch.workspace, 0);
+        scratch.Wait();
+        auto total = mm::Read(offsets.Data() + chunks);
+        if (total > outputCapacity) throw std::length_error("StaticMultimap: output capacity is insufficient");
+        if (!total) return 0;
+        mm::RequirePointer(probeOut);
+        mm::RequirePointer(valueOut);
+        mm::Bytes<Key>(total);
+        mm::Bytes<Value>(total);
+        scratch.Begin(stream);
+        if (n == 1 && s.indices.Data() && total == s.size && total >= 32 && total <= 2048) {
+            mm::RetrieveSingleKey<Key, Value><<<1, 0, stream>>>(s.table.Data(), static_cast<Key*>(keys), total,
+                static_cast<Key*>(probeOut), static_cast<Value*>(valueOut));
+        } else if constexpr (Cached) {
+            WriteQueryMatches(s, static_cast<Key*>(keys), n, static_cast<Key*>(probeOut),
+                              static_cast<Value*>(valueOut), stream);
+        } else {
+            mm::Retrieve<Key, Value><<<mm::Blocks(), 0, stream>>>(s.table.Data(), s.indices.Data(), s.capacity,
+                s.emptyKey, s.emptyValue, static_cast<Key*>(keys), n, counts.Data(), offsets.Data(), matches.Data(),
+                static_cast<Key*>(probeOut), static_cast<Value*>(valueOut));
+        }
+        scratch.Wait();
+        return total;
+    }
     std::unique_ptr<State> state_;
     friend struct detail::multimap::StaticMultimapTestAccess;
 
@@ -394,39 +507,15 @@ public:
         namespace mm = detail::multimap;
         auto& s = Get();
         auto chunks = QueryChunks(keys, count);
-        if (!chunks) {
-            return 0;
-        }
+        if (!chunks) return 0;
         SizeType n = count;
-        auto& scratch = s.queryScratch;
-        scratch.Prepare(n, chunks, true);
-        auto& counts = scratch.counts;
-        auto& offsets = scratch.offsets;
-        auto& matches = scratch.matches;
-        scratch.Begin(stream);
-        mm::RetrieveCounts<Key, Value><<<mm::Blocks(), 0, stream>>>(s.table.Data(), s.indices.Data(), s.capacity,
-                                                                    s.emptyKey, s.emptyValue, static_cast<Key*>(keys),
-                                                                    n, counts.Data(), offsets.Data(), matches.Data());
-        mm::PrefixPrepared(offsets.Data(), chunks, stream, scratch.workspace, 0);
-        scratch.Wait();
-        auto total = mm::Read(offsets.Data() + chunks);
-        if (total > SizeType(outputCapacity)) {
-            throw std::length_error("StaticMultimap: output capacity is insufficient");
+        if (SizeType(outputCapacity) <= n || s.size <= 1 ||
+            !mm::RetrieveCacheLimit<Value>(n, SizeType(outputCapacity), s.size)) {
+            return RetrievePrepared<false>(s, keys, n, chunks, probeOut, valueOut, SizeType(outputCapacity), stream);
         }
-        if (!total) {
-            return 0;
-        }
-        mm::RequirePointer(probeOut);
-        mm::RequirePointer(valueOut);
-        mm::Bytes<Key>(total);
-        mm::Bytes<Value>(total);
-        scratch.Begin(stream);
-        mm::Retrieve<Key, Value><<<mm::Blocks(), 0, stream>>>(
-            s.table.Data(), s.indices.Data(), s.capacity, s.emptyKey, s.emptyValue, static_cast<Key*>(keys), n,
-            counts.Data(), offsets.Data(), matches.Data(), static_cast<Key*>(probeOut), static_cast<Value*>(valueOut));
-        scratch.Wait();
-        return total;
+        return RetrievePrepared<true>(s, keys, n, chunks, probeOut, valueOut, SizeType(outputCapacity), stream);
     }
+
     /**
      * @brief Export all retained pairs, including duplicates.
      * @return Number of output pairs.

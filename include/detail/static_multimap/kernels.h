@@ -203,6 +203,26 @@ union RetrievalMatch {
     Value value;
 };
 
+// Each query owns its cache segment; no global cursor or atomic list is needed.
+template <class Value>
+struct RetrievalCache {
+    __gm__ RetrievalMatch<Value>* values;
+    std::size_t limit;
+    COLLECTION_SIMT_DEVICE bool Accept(uint64_t index) const { return index < limit; }
+    COLLECTION_SIMT_DEVICE void Store(uint64_t index, Value value) const { values[index].value = value; }
+};
+
+template <bool Cached, class Key, class Value>
+COLLECTION_SIMT_DEVICE uint64_t CountForRetrieve(StaticMultimapRef<Key, Value> const& ref, Key key,
+    std::size_t* first, __gm__ RetrievalMatch<Value>* values, std::size_t limit)
+{
+    if constexpr (Cached) {
+        return ref.CountCached(key, first, RetrievalCache<Value>{values, limit});
+    } else {
+        return ref.Count(key, first);
+    }
+}
+
 template <class Key, class Value, bool SaveMatches>
 COLLECTION_SIMT_VF LAUNCH_BOUND(THREADS) inline void QueryCountsSimt(__gm__ Pair<Key, Value>* table,
                                                                      __gm__ uint64_t* indices, std::size_t capacity,
@@ -225,6 +245,50 @@ COLLECTION_SIMT_VF LAUNCH_BOUND(THREADS) inline void QueryCountsSimt(__gm__ Pair
             if constexpr (SaveMatches) {
                 std::size_t first = capacity;
                 auto count = ref.Count(keys[i], &first);
+                counts[i] = count;
+                if (count == 1) {
+                    matches[i].value = ref.PairAt(first).second;
+                } else {
+                    matches[i].slot = first;
+                }
+                sum += count;
+            } else {
+                sum += ref.Count(keys[i]);
+            }
+        }
+        for (uint32_t delta = WARP / 2; delta > 0; delta /= 2) {
+            sum += AscendC::Simt::WarpShflDownSync(sum, delta, WARP);
+        }
+        if (lane == 0) {
+            chunkCounts[c] = sum;
+        }
+    }
+}
+
+template <class Key, class Value, bool SaveMatches = true, bool Cached = true>
+COLLECTION_SIMT_VF LAUNCH_BOUND(THREADS) inline void QueryCountsCachedSimt(__gm__ Pair<Key, Value>* table,
+                                                                     __gm__ uint64_t* indices, std::size_t capacity,
+                                                                     Key emptyKey, Value emptyValue, __gm__ Key* keys,
+                                                                     std::size_t n, __gm__ uint64_t* counts,
+                                                                     __gm__ uint64_t* chunkCounts,
+                                                                     __gm__ RetrievalMatch<Value>* matches,
+                                                                     std::size_t cacheLimit = 0)
+{
+    constexpr uint32_t WARP = 32;
+    auto lane = AscendC::Simt::GetThreadIdx() % WARP;
+    StaticMultimapRef<Key, Value> ref{table, capacity, emptyKey, emptyValue, indices};
+    auto chunks = (n - 1) / CHUNK + 1;
+    for (auto c = ThreadIndex() / WARP; c < chunks; c += ThreadStride() / WARP) {
+        uint64_t sum = 0;
+        auto end = (c + 1) * CHUNK;
+        if (end > n) {
+            end = n;
+        }
+        for (auto i = c * CHUNK + lane; i < end; i += WARP) {
+            if constexpr (SaveMatches) {
+                std::size_t first = capacity;
+                auto count = CountForRetrieve<Cached>(ref, keys[i], &first,
+                    Cached ? matches + n + i * cacheLimit : nullptr, cacheLimit);
                 counts[i] = count;
                 if (count == 1) {
                     matches[i].value = ref.PairAt(first).second;
@@ -276,6 +340,17 @@ COLLECTION_SIMT_DEVICE void WriteMatches(StaticMultimapRef<Key, Value> const& re
 }
 
 template <class Key, class Value>
+COLLECTION_SIMT_DEVICE void WriteCachedMatches(__gm__ RetrievalMatch<Value>* values, Key key, uint64_t begin,
+    uint64_t count, __gm__ Key* outputKeys, __gm__ Value* outputValues)
+{
+    for (uint64_t j = 0; j < count; ++j) {
+        outputKeys[begin + j] = key;
+        outputValues[begin + j] = values[j].value;
+    }
+    HeapSort(outputValues + begin, count);
+}
+
+template <class Key, class Value>
 COLLECTION_SIMT_VF LAUNCH_BOUND(THREADS) inline void RetrieveSimt(
     __gm__ Pair<Key, Value>* table, __gm__ uint64_t* indices, std::size_t capacity, Key emptyKey, Value emptyValue,
     __gm__ Key* keys, std::size_t n, __gm__ uint64_t* counts, __gm__ uint64_t* chunkOffsets,
@@ -306,6 +381,98 @@ COLLECTION_SIMT_VF LAUNCH_BOUND(THREADS) inline void RetrieveSimt(
             }
             WriteMatches(ref, key, matches[i].slot, begin, count, outputKeys, outputValues);
         }
+    }
+}
+
+template <class Key, class Value, bool Cached = true>
+COLLECTION_SIMT_VF LAUNCH_BOUND(THREADS) inline void RetrieveCachedSimt(
+    __gm__ Pair<Key, Value>* table, __gm__ uint64_t* indices, std::size_t capacity, Key emptyKey, Value emptyValue,
+    __gm__ Key* keys, std::size_t n, __gm__ uint64_t* counts, __gm__ uint64_t* chunkOffsets,
+    __gm__ RetrievalMatch<Value>* matches, __gm__ Key* outputKeys, __gm__ Value* outputValues,
+    std::size_t cacheLimit = 0)
+{
+    constexpr uint32_t WARP = 32;
+    auto lane = AscendC::Simt::GetThreadIdx() % WARP;
+    StaticMultimapRef<Key, Value> ref{table, capacity, emptyKey, emptyValue, indices};
+    auto chunks = (n - 1) / CHUNK + 1;
+    for (auto c = ThreadIndex() / WARP; c < chunks; c += ThreadStride() / WARP) {
+        uint64_t carry = chunkOffsets[c];
+        // All lanes participate, including the final partially populated warp.
+        for (uint32_t part = 0; part < CHUNK; part += WARP) {
+            auto i = c * CHUNK + part + lane;
+            uint64_t count = i < n ? counts[i] : 0;
+            uint64_t sum = count;
+            sum = InclusiveWarpSum(sum, lane);
+            auto begin = carry + sum - count;
+            carry += AscendC::Simt::WarpShflSync(sum, WARP - 1, WARP);
+            if (!count) {
+                continue;
+            }
+            Key key = keys[i];
+            if (count == 1) {
+                outputKeys[begin] = key;
+                outputValues[begin] = matches[i].value;
+                continue;
+            }
+            if constexpr (Cached) {
+                if (count <= cacheLimit) {
+                    WriteCachedMatches(matches + n + i * cacheLimit, key, begin, count, outputKeys, outputValues);
+                    continue;
+                }
+            }
+            WriteMatches(ref, key, matches[i].slot, begin, count, outputKeys, outputValues);
+        }
+    }
+}
+
+// A single full-table query needs no slot filtering. Sort its dense values
+// cooperatively in one warp, without allocating another device buffer.
+template <class Value>
+COLLECTION_SIMT_DEVICE void SortWarpValues(Value* values, uint32_t columns, uint32_t lane)
+{
+    constexpr uint32_t warp = 32;
+    for (uint32_t span = 2; span <= columns * warp; span *= 2) {
+        for (uint32_t distance = span / 2; distance; distance /= 2) {
+            for (uint32_t j = 0; j < columns; ++j) {
+                bool ascending = ((j * warp + lane) & span) == 0;
+                if (distance >= warp) {
+                    auto partner = j ^ (distance / warp);
+                    if (j < partner) {
+                        Value a = values[j], b = values[partner];
+                        if (ascending ? a > b : a < b) {
+                            values[j] = b; values[partner] = a;
+                        }
+                    }
+                } else {
+                    auto other = AscendC::Simt::WarpShflSync(values[j], lane ^ distance, warp);
+                    auto current = values[j];
+                    bool takeMinimum = ascending == ((lane & distance) == 0);
+                    values[j] = takeMinimum ? (current < other ? current : other)
+                                            : (current > other ? current : other);
+                }
+            }
+        }
+    }
+}
+
+template <class Key, class Value>
+COLLECTION_SIMT_VF LAUNCH_BOUND(32) inline void RetrieveSingleKeySimt(__gm__ Pair<Key, Value>* table,
+    __gm__ Key* keys, std::size_t total, __gm__ Key* outputKeys, __gm__ Value* outputValues)
+{
+    auto lane = AscendC::Simt::GetThreadIdx();
+    uint32_t length = 32;
+    while (length < total) length *= 2;
+    auto columns = length / 32;
+    Value values[64];
+    for (uint32_t j = 0; j < columns; ++j) {
+        auto i = j * 32 + lane;
+        values[j] = i < total ? table[i].second : std::numeric_limits<Value>::max();
+    }
+    SortWarpValues(values, columns, lane);
+    auto key = keys[0];
+    for (uint32_t j = 0; j < columns; ++j) {
+        auto i = j * 32 + lane;
+        if (i < total) { outputKeys[i] = key; outputValues[i] = values[j]; }
     }
 }
 
@@ -511,6 +678,34 @@ COLLECTION_AIV_GLOBAL void Retrieve(__gm__ Pair<Key, Value>* table, __gm__ uint6
     AscendC::Simt::VF_CALL<RetrieveSimt<Key, Value>>(AscendC::Simt::Dim3{THREADS}, table, indices, capacity, emptyKey,
                                                      emptyValue, keys, n, counts, chunkOffsets, matches, outputKeys,
                                                      outputValues);
+}
+
+template <class Key, class Value>
+COLLECTION_AIV_GLOBAL void RetrieveSingleKey(__gm__ Pair<Key, Value>* table, __gm__ Key* keys,
+    std::size_t total, __gm__ Key* outputKeys, __gm__ Value* outputValues)
+{
+    AscendC::Simt::VF_CALL<RetrieveSingleKeySimt<Key, Value>>(AscendC::Simt::Dim3{32}, table, keys,
+        total, outputKeys, outputValues);
+}
+
+template <class Key, class Value>
+COLLECTION_AIV_GLOBAL void RetrieveCountsCached(__gm__ Pair<Key, Value>* table, __gm__ uint64_t* indices,
+    std::size_t capacity, Key emptyKey, Value emptyValue, __gm__ Key* keys, std::size_t n,
+    __gm__ uint64_t* counts, __gm__ uint64_t* chunkCounts, __gm__ RetrievalMatch<Value>* matches,
+    std::size_t cacheLimit)
+{
+    AscendC::Simt::VF_CALL<QueryCountsCachedSimt<Key, Value>>(AscendC::Simt::Dim3{THREADS}, table, indices,
+        capacity, emptyKey, emptyValue, keys, n, counts, chunkCounts, matches, cacheLimit);
+}
+
+template <class Key, class Value>
+COLLECTION_AIV_GLOBAL void RetrieveCached(__gm__ Pair<Key, Value>* table, __gm__ uint64_t* indices,
+    std::size_t capacity, Key emptyKey, Value emptyValue, __gm__ Key* keys, std::size_t n,
+    __gm__ uint64_t* counts, __gm__ uint64_t* chunkOffsets, __gm__ RetrievalMatch<Value>* matches,
+    __gm__ Key* outputKeys, __gm__ Value* outputValues, std::size_t cacheLimit)
+{
+    AscendC::Simt::VF_CALL<RetrieveCachedSimt<Key, Value>>(AscendC::Simt::Dim3{THREADS}, table, indices,
+        capacity, emptyKey, emptyValue, keys, n, counts, chunkOffsets, matches, outputKeys, outputValues, cacheLimit);
 }
 
 template <class Key, class Value, bool Write>

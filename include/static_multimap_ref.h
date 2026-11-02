@@ -288,6 +288,33 @@ struct StaticMultimapRef {
     {
         return QueryImpl<Indexed, QueryMode::Count>(key, first);
     }
+    template <bool Indexed, class Sink>
+    COLLECTION_SIMT_DEVICE uint64_t CountCachedImpl(Key key, std::size_t* first, Sink sink) const
+    {
+        uint64_t count = 0;
+        if (key == emptyKey) return count;
+        using Index = std::conditional_t<Indexed, uint32_t, std::size_t>;
+        auto slot = Index(Start(key));
+        auto limit = Index(capacity);
+        for (Index step = 0; step < limit; ++step) {
+            auto entry = Indexed ? indices[slot] : 0;
+            if (Indexed ? entry == 0 : slots[slot].first == emptyKey) break;
+            if (Indexed ? Matches(entry, key) : slots[slot].first == key) {
+                if (first && count == 0) *first = slot;
+                if (sink.Accept(count)) {
+                    sink.Store(count, Indexed ? slots[uint32_t(entry) - 1].second : slots[slot].second);
+                }
+                ++count;
+            }
+            if (++slot == limit) slot = 0;
+        }
+        return count;
+    }
+    template <class Sink>
+    COLLECTION_SIMT_DEVICE uint64_t CountCached(Key key, std::size_t* first, Sink sink) const
+    {
+        return indices ? CountCachedImpl<true>(key, first, sink) : CountCachedImpl<false>(key, first, sink);
+    }
     COLLECTION_SIMT_DEVICE bool Contains(Key key) const
     {
         return indices ? ContainsImpl<true>(key) : ContainsImpl<false>(key);
