@@ -22,44 +22,26 @@ ops-collections
 ├── doxygen        //Doxygen配置文件
 ├── include        //存放公共头文件
 │   ├── detail     //容器实现细节
-│   │   ├── extent              //extent具体实现
-│   │   ├── dynamic_map         //dynamic_map具体实现
-│   │   ├── hash_functions      //哈希函数实现
 │   │   ├── open_addressing     //开放寻址法实现
-│   │   ├── pair                //pair具体实现
-│   │   ├── probing_scheme      //probing_scheme具体实现
-│   │   ├── roaring_bitmap      //roaring_bitmap具体实现
 │   │   ├── static_map          //static_map具体实现
-│   │   ├── static_multimap     //StaticMultimap具体实现
 │   │   ├── static_set          //static_set具体实现
-│   │   └── storages            //存储相关实现
+│   │   └── ...                 //其余容器实现细节（bloom_filter、dynamic_map、storages等）
 │   ├── utility                 //通用函数、工具
-│   ├── bucket_storage.h        //BucketStorage容器头文件
-│   ├── counter_storage.h       //CounterStorage容器头文件
+│   ├── bloom_filter.h          //BloomFilter容器对外头文件
 │   ├── dynamic_map.h           //DynamicMap容器对外头文件
-│   ├── extent.h                //Extent头文件
-│   ├── hash_functions.h        //哈希函数对外头文件
-│   ├── macros.h                //宏定义
-│   ├── pair.h                  //Pair头文件
-│   ├── probing_scheme.h        //探测策略头文件
+│   ├── hyperloglog.h           //HyperLogLog容器对外头文件
 │   ├── roaring_bitmap.h        //RoaringBitmap容器对外头文件
-│   ├── roaring_bitmap_ref.h    //RoaringBitmapRef设备端引用头文件
 │   ├── static_map.h            //StaticMap容器对外头文件
 │   ├── static_multimap.h       //StaticMultimap容器对外头文件
-│   ├── static_multimap_ref.h   //StaticMultimap设备侧引用
+│   ├── static_multiset.h       //StaticMultiset容器对外头文件
 │   ├── static_set.h            //StaticSet容器对外头文件
-│   ├── static_map_ref.h        //StaticMapRef设备端引用头文件
-│   ├── static_set_ref.h        //StaticSetRef设备端引用头文件
-│   └── storage.h               //Storage基类头文件
+│   └── ...                     //其余基础组件头文件（pair.h、extent.h、storage.h等）
 ├── scripts        //脚本文件存放目录
 │   └── build.sh   //构建脚本
 └── tests          //测试代码
     ├── common     //通用测试工具
     ├── performance//性能测试
-    │   ├── static_map
-    │   └── static_multimap //StaticMultimap性能测试
-    ├── static_map //StaticMap单元测试
-    ├── static_multimap //StaticMultimap功能测试
+    ├── static_map //各容器单元测试目录（static_map、static_set、static_multimap等）
     └── utility    //基础组件测试
 ```
 

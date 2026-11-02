@@ -2,6 +2,8 @@
 
 本文档提供ops-collections库的详细API接口说明，包括构造函数、插入、查找、删除、清空等操作。
 
+> 说明：示例中的 `aclco::test::DeviceBuffer` 是测试辅助类型，定义于 `tests/common/device_buffer.h`，仅用于简化示例中的设备内存分配与拷贝，不属于库的公开接口；正式代码请使用 `aclrtMalloc`/`aclrtMemcpy` 等公开接口。
+
 ## 一、类型定义
 
 ### 1.1 StaticMap
@@ -189,7 +191,7 @@ for (size_t i = 0; i < insertCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
+aclco::test::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
 devicePairs.CopyFromHostAsync(hostPairs.data(), insertCount, stream);
 
 // 同步插入操作
@@ -213,7 +215,7 @@ for (size_t i = 0; i < insertCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<SetKey> deviceKeys(insertCount);
+aclco::test::DeviceBuffer<SetKey> deviceKeys(insertCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), insertCount, stream);
 
 // 同步插入操作
@@ -322,10 +324,10 @@ for (size_t i = 0; i < insertCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
+aclco::test::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
 devicePairs.CopyFromHostAsync(hostPairs.data(), insertCount, stream);
 
-aclco::DeviceBuffer<uint32_t> deviceStencil(insertCount);
+aclco::test::DeviceBuffer<uint32_t> deviceStencil(insertCount);
 deviceStencil.CopyFromHostAsync(hostStencil.data(), insertCount, stream);
 
 // 同步条件插入操作：只有stencil为奇数时才插入对应的键值对
@@ -356,10 +358,10 @@ for (size_t i = 0; i < insertCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<SetKey> deviceKeys(insertCount);
+aclco::test::DeviceBuffer<SetKey> deviceKeys(insertCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), insertCount, stream);
 
-aclco::DeviceBuffer<uint32_t> deviceStencil(insertCount);
+aclco::test::DeviceBuffer<uint32_t> deviceStencil(insertCount);
 deviceStencil.CopyFromHostAsync(hostStencil.data(), insertCount, stream);
 
 // 同步条件插入操作：只有stencil为奇数时才插入对应的键值对
@@ -430,7 +432,7 @@ for (size_t i = 0; i < insertCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
+aclco::test::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
 devicePairs.CopyFromHostAsync(hostPairs.data(), insertCount, stream);
 
 // 先插入初始键值对
@@ -445,7 +447,7 @@ for (size_t i = 0; i < insertCount; ++i) {
 }
 
 // 分配设备内存并拷贝更新数据
-aclco::DeviceBuffer<aclco::Pair<Key, Value>> deviceUpdatePairs(insertCount);
+aclco::test::DeviceBuffer<aclco::Pair<Key, Value>> deviceUpdatePairs(insertCount);
 deviceUpdatePairs.CopyFromHostAsync(updatePairs.data(), insertCount, stream);
 
 // 同步插入或更新操作：键已存在则更新值，键不存在则插入
@@ -525,12 +527,12 @@ for (size_t i = 0; i < insertCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
+aclco::test::DeviceBuffer<aclco::Pair<Key, Value>> devicePairs(insertCount);
 devicePairs.CopyFromHostAsync(hostPairs.data(), insertCount, stream);
 
 // 分配输出缓冲区
-aclco::DeviceBuffer<Value> deviceOutputFind(insertCount);
-aclco::DeviceBuffer<unsigned char> deviceOutputInsert(insertCount);
+aclco::test::DeviceBuffer<Value> deviceOutputFind(insertCount);
+aclco::test::DeviceBuffer<unsigned char> deviceOutputInsert(insertCount);
 
 // 同步插入并查找操作
 map.InsertAndFind(static_cast<void*>(devicePairs.Data()),
@@ -573,12 +575,12 @@ for (size_t i = 0; i < insertCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<SetKey> deviceKeys(insertCount);
+aclco::test::DeviceBuffer<SetKey> deviceKeys(insertCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), insertCount, stream);
 
 // 分配输出缓冲区
-aclco::DeviceBuffer<SetKey> deviceOutputFind(insertCount);
-aclco::DeviceBuffer<unsigned char> deviceOutputInsert(insertCount);
+aclco::test::DeviceBuffer<SetKey> deviceOutputFind(insertCount);
+aclco::test::DeviceBuffer<unsigned char> deviceOutputInsert(insertCount);
 
 // 同步插入并查找操作
 set.InsertAndFind(static_cast<void*>(deviceKeys.Data()),
@@ -674,11 +676,11 @@ for (size_t i = 0; i < findCount; ++i) {
 }
 
 // 分配设备内存并拷贝键数据
-aclco::DeviceBuffer<Key> deviceKeys(findCount);
+aclco::test::DeviceBuffer<Key> deviceKeys(findCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), findCount, stream);
 
 // 分配输出缓冲区
-aclco::DeviceBuffer<Value> deviceValues(findCount);
+aclco::test::DeviceBuffer<Value> deviceValues(findCount);
 
 // 同步查找操作
 map.Find(static_cast<void*>(deviceKeys.Data()),
@@ -715,11 +717,11 @@ for (size_t i = 0; i < findCount; ++i) {
 }
 
 // 分配设备内存并拷贝键数据
-aclco::DeviceBuffer<SetKey> deviceKeys(findCount);
+aclco::test::DeviceBuffer<SetKey> deviceKeys(findCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), findCount, stream);
 
 // 分配输出缓冲区
-aclco::DeviceBuffer<SetKey> deviceOutputKeys(findCount);
+aclco::test::DeviceBuffer<SetKey> deviceOutputKeys(findCount);
 
 // 同步查找操作
 set.Find(static_cast<void*>(deviceKeys.Data()),
@@ -828,14 +830,14 @@ for (size_t i = 0; i < findCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<Key> deviceKeys(findCount);
+aclco::test::DeviceBuffer<Key> deviceKeys(findCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), findCount, stream);
 
-aclco::DeviceBuffer<uint32_t> deviceStencil(findCount);
+aclco::test::DeviceBuffer<uint32_t> deviceStencil(findCount);
 deviceStencil.CopyFromHostAsync(hostStencil.data(), findCount, stream);
 
 // 分配输出缓冲区
-aclco::DeviceBuffer<Value> deviceValues(findCount);
+aclco::test::DeviceBuffer<Value> deviceValues(findCount);
 
 // 同步条件查找操作：只有stencil为奇数时才查找对应的键
 map.FindIf<uint32_t, IsOdd>(
@@ -866,14 +868,14 @@ for (size_t i = 0; i < findCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<SetKey> deviceKeys(findCount);
+aclco::test::DeviceBuffer<SetKey> deviceKeys(findCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), findCount, stream);
 
-aclco::DeviceBuffer<uint32_t> deviceStencil(findCount);
+aclco::test::DeviceBuffer<uint32_t> deviceStencil(findCount);
 deviceStencil.CopyFromHostAsync(hostStencil.data(), findCount, stream);
 
 // 分配输出缓冲区
-aclco::DeviceBuffer<SetKey> deviceOutputKeys(findCount);
+aclco::test::DeviceBuffer<SetKey> deviceOutputKeys(findCount);
 
 // 同步条件查找操作：只有stencil为奇数时才查找对应的键
 set.FindIf<uint32_t, IsOdd>(
@@ -947,11 +949,11 @@ for (size_t i = 0; i < checkCount; ++i) {
 }
 
 // 分配设备内存并拷贝键数据
-aclco::DeviceBuffer<Key> deviceKeys(checkCount);
+aclco::test::DeviceBuffer<Key> deviceKeys(checkCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), checkCount, stream);
 
 // 分配输出缓冲区（bool类型）
-aclco::DeviceBuffer<bool> deviceResults(checkCount);
+aclco::test::DeviceBuffer<bool> deviceResults(checkCount);
 
 // 同步检查操作
 map.Contains(static_cast<void*>(deviceKeys.Data()),
@@ -1065,14 +1067,14 @@ for (size_t i = 0; i < checkCount; ++i) {
 }
 
 // 分配设备内存并拷贝数据
-aclco::DeviceBuffer<Key> deviceKeys(checkCount);
+aclco::test::DeviceBuffer<Key> deviceKeys(checkCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), checkCount, stream);
 
-aclco::DeviceBuffer<uint32_t> deviceStencil(checkCount);
+aclco::test::DeviceBuffer<uint32_t> deviceStencil(checkCount);
 deviceStencil.CopyFromHostAsync(hostStencil.data(), checkCount, stream);
 
 // 分配输出缓冲区（bool类型）
-aclco::DeviceBuffer<bool> deviceResults(checkCount);
+aclco::test::DeviceBuffer<bool> deviceResults(checkCount);
 
 // 同步条件检查操作：只有stencil为奇数时才检查对应的键
 map.ContainsIf<uint32_t, IsOdd>(
@@ -1146,7 +1148,7 @@ for (size_t i = 0; i < eraseCount; ++i) {
 }
 
 // 分配设备内存并拷贝键数据
-aclco::DeviceBuffer<Key> deviceKeys(eraseCount);
+aclco::test::DeviceBuffer<Key> deviceKeys(eraseCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), eraseCount, stream);
 
 // 同步删除操作
@@ -1238,11 +1240,11 @@ for (size_t i = 0; i < keyCount; ++i) {
 }
 
 // 分配设备内存并拷贝键数据
-aclco::DeviceBuffer<Key> deviceKeys(keyCount);
+aclco::test::DeviceBuffer<Key> deviceKeys(keyCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), keyCount, stream);
 
 // 分配并初始化回调参数（计数器）
-aclco::DeviceBuffer<uint32_t> deviceCounter(1);
+aclco::test::DeviceBuffer<uint32_t> deviceCounter(1);
 deviceCounter.MemsetZero(stream);
 
 // 同步遍历操作
@@ -1291,11 +1293,11 @@ for (size_t i = 0; i < keyCount; ++i) {
 }
 
 // 分配设备内存并拷贝键数据
-aclco::DeviceBuffer<SetKey> deviceKeys(keyCount);
+aclco::test::DeviceBuffer<SetKey> deviceKeys(keyCount);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), keyCount, stream);
 
 // 分配并初始化回调参数（计数器）
-aclco::DeviceBuffer<uint32_t> deviceCounter(1);
+aclco::test::DeviceBuffer<uint32_t> deviceCounter(1);
 deviceCounter.MemsetZero(stream);
 
 // 同步遍历操作
@@ -1398,7 +1400,7 @@ for (size_t i = 0; i < countKeyNum; ++i) {
 }
 
 // 分配设备内存并拷贝键数据
-aclco::DeviceBuffer<Key> deviceKeys(countKeyNum);
+aclco::test::DeviceBuffer<Key> deviceKeys(countKeyNum);
 deviceKeys.CopyFromHostAsync(hostKeys.data(), countKeyNum, stream);
 
 // 同步统计操作
