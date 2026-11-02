@@ -68,6 +68,13 @@ ops-collections
 ### 硬件要求
 Atlas 950系列产品及后续支持SIMT能力的昇腾系列产品
 
+### 软件要求
+- CANN 9.0.0-beta.2及以上版本
+- CMake 3.16及以上版本（构建测试时需要），Ubuntu系统可执行以下命令安装：
+```sh
+sudo apt-get install cmake
+```
+
 ### 快速安装CANN软件
 
 本节提供快速安装CANN软件的示例命令，更多安装步骤请参考[详细安装指南](#cann详细安装指南)。
@@ -100,10 +107,13 @@ ops-collections 的功能测试依赖于 **Catch2** 测试框架。
 - **推荐版本**：v3.5.4 或更高版本
 
 #### 自动安装
-构建脚本会自动下载并安装 Catch2 框架，无需手动安装。在首次运行功能测试时，脚本会自动从 GitHub 克隆 Catch2 v3.5.4 到本地 `3rdparty/Catch2` 目录。
+构建脚本会自动下载并安装 Catch2 框架，无需手动安装。在首次运行功能测试时，脚本会自动克隆 Catch2 v3.5.4 到本地 `3rdparty/Catch2` 目录，默认源为 GitHub。无法访问 GitHub 时，可通过环境变量 `CATCH2_REPO` 指定镜像源，例如：
+```sh
+export CATCH2_REPO=https://gitcode.com/gh_mirrors/ca/Catch2.git
+```
 
-#### 手动安装（可选）
-如果需要手动安装 Catch2，可以执行以下命令：
+#### 离线安装（可选）
+也可以提前将 Catch2 源码放置到 `3rdparty/Catch2` 目录，脚本检测到该目录已存在时将不再克隆：
 ```sh
 git clone --depth 1 --branch v3.5.4 https://github.com/catchorg/Catch2.git 3rdparty/Catch2
 ```

@@ -25,6 +25,7 @@ bisheng_aicore_arch="${BISHENG_AICORE_ARCH:-dav-3510}"
 build_dir="${ROOT_DIR}/build_cmake/ccec_build"
 bin_dir="${build_dir}/tests"
 catch2_src="${ROOT_DIR}/3rdparty/Catch2"
+catch2_repo="${CATCH2_REPO:-https://github.com/catchorg/Catch2.git}"
 catch2_build="${ROOT_DIR}/build_cmake/_catch2_gxx_build"
 catch2_install="${ROOT_DIR}/build_cmake/_catch2_gxx_install"
 doxygen_build="${ROOT_DIR}/build_cmake/_doxygen_gxx_build"
@@ -229,7 +230,7 @@ function build_catch2() {
   mkdir -p "${catch2_src}"
   if [ ! -d "${catch2_src}/.git" ]; then
     echo "[3rdparty] 克隆 Catch2 到 ${catch2_src}"
-    git clone --depth 1 --branch v3.5.4 https://github.com/catchorg/Catch2.git "${catch2_src}"
+    git clone --depth 1 --branch v3.5.4 "${catch2_repo}" "${catch2_src}"
   fi
 
   mkdir -p "${catch2_build}" "${catch2_install}"
@@ -397,7 +398,7 @@ function run_tests() {
   local PATTERN="${2:-}"
 
   if [ ! -d "${bin_dir}" ]; then
-    echo "ERROR: ${bin_dir} not found. 先运行构建: $0 build"
+    echo "ERROR: ${bin_dir} not found. 先运行构建: $0 -b"
     exit 1
   fi
 

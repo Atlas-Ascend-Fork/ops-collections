@@ -86,7 +86,7 @@ if(BUILD_TESTS)
   if(NOT Catch2_DIR)
     message(FATAL_ERROR
       "Catch2_DIR is not set. Please build/install Catch2 with g++ first "
-      "(use scripts/build_tests.sh), then rerun CMake with "
+      "(use scripts/build.sh -b), then rerun CMake with "
       "-DCatch2_DIR=<catch2_install>/lib/cmake/Catch2."
     )
   endif()
