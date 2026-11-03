@@ -431,15 +431,11 @@ public:
     /**
      * @brief Insert the input prefix that fits; retain duplicate pairs.
      * @return Number of pairs that were not admitted.
-     * @throws std::invalid_argument If a nonempty input contains a reserved key or value.
+     * @throws std::invalid_argument If a nonempty input is null or contains a reserved key or value.
      * @note All input pairs are validated before any insertion.
      */
     SizeType Insert(void* pairs, ExtentType n, aclrtStream stream = nullptr)
     {
-        (void)Get();
-        if (!pairs) {
-            return SizeType(n);
-        }
         return InsertImpl<uint8_t, detail::multimap::SelectAll, false>(pairs, nullptr, n, stream);
     }
     /**

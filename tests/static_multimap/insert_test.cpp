@@ -53,12 +53,15 @@ TEMPLATE_TEST_CASE_SIG("static_multimap insert correctness", "[static_multimap][
     {
         auto before = map.Size(stream);
         REQUIRE(map.Insert(d_pairs.Data(), aclco::Extent<std::size_t>(0u), stream) == 0u);
+        REQUIRE(map.Insert(nullptr, aclco::Extent<std::size_t>(0u), stream) == 0u);
         REQUIRE(map.Size(stream) == before);
     }
 
-    SECTION("null input reports all failures")
+    SECTION("nonempty null input is rejected without changing size")
     {
-        REQUIRE(map.Insert(nullptr, aclco::Extent<std::size_t>(3u), stream) == 3u);
+        auto before = map.Size(stream);
+        REQUIRE_THROWS_AS(map.Insert(nullptr, aclco::Extent<std::size_t>(3u), stream), std::invalid_argument);
+        REQUIRE(map.Size(stream) == before);
     }
 }
 
@@ -72,10 +75,14 @@ TEMPLATE_TEST_CASE_SIG("static_multimap insert capacity boundary", "[static_mult
     constexpr std::size_t requested = 128u;
     auto map = MakeMultimap<Key, Value>(requested, stream);
     auto capacity = map.Capacity();
+    REQUIRE_THROWS_AS(map.Insert(nullptr, aclco::Extent<std::size_t>(1u), stream), std::invalid_argument);
+    REQUIRE(map.Size(stream) == 0u);
     auto pairs = MakePairs<Key, Value>(capacity + 5u, 1u);
     aclco::test::DeviceBuffer<aclco::Pair<Key, Value>> d_pairs(pairs.size());
     d_pairs.CopyFromHostAsync(pairs.data(), pairs.size(), stream);
     auto failures = map.Insert(d_pairs.Data(), aclco::Extent<std::size_t>(pairs.size()), stream);
     REQUIRE(failures == pairs.size() - capacity);
+    REQUIRE(map.Size(stream) == capacity);
+    REQUIRE_THROWS_AS(map.Insert(nullptr, aclco::Extent<std::size_t>(1u), stream), std::invalid_argument);
     REQUIRE(map.Size(stream) == capacity);
 }
