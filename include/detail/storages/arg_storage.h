@@ -58,7 +58,7 @@ class ArgStorage {
   {
     SizeType hCount;
     uint32_t ret = aclrtMemcpy((void*)&hCount, capacity_, (void*)slots_.get(), capacity_, ACL_MEMCPY_DEVICE_TO_HOST);
-    CheckRet(ret, "ArgStorage::LoadToHost");
+    CheckRetOrThrow(ret, "ArgStorage::LoadToHost");
     return hCount;
   }
 
@@ -71,6 +71,13 @@ class ArgStorage {
   {
     uint32_t ret = aclrtMemcpy((void*)slots_.get(), capacity_, (void*)&value, capacity_, ACL_MEMCPY_HOST_TO_DEVICE);
     CheckRet(ret, "ArgStorage::Initialize::aclrtMemcpy");
+  }
+
+  // Enqueue counter reset before its consuming kernel on the same stream.
+  void InitializeZeroAsync(aclrtStream stream = nullptr)
+  {
+    CheckRetOrThrow(aclrtMemsetAsync(slots_.get(), capacity_, 0, capacity_, stream),
+                    "ArgStorage::InitializeZeroAsync::aclrtMemsetAsync");
   }
 
  private:

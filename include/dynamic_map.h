@@ -486,7 +486,7 @@ private:
         } else {
             // mask[i]=1 表示 key 已在旧子表 → 只插 mask==0 的元素（活跃子表内 CAS 自带去重）。
             BuildContainsMask(values, n, stream);
-            counter_.Initialize(0, stream);
+            counter_.InitializeZeroAsync(stream);
             aclco::CountZero<>
                 <<<aivCoreNum_, 0, stream>>>(Mask(), static_cast<uint32_t>(n), (uint32_t*)counter_.Data());
             SizeType failed = submaps_[a]->template InsertIf<uint8_t, MaskIsZero>(values, Mask(), Extent{n}, stream);
@@ -511,7 +511,7 @@ private:
         } else {
             // mask!=0（命中旧子表）→ 各旧子表 assign-only；mask==0 → 活跃子表先 assign 再 InsertIf 计数。
             BuildContainsMask(values, n, stream);
-            counter_.Initialize(0, stream);
+            counter_.InitializeZeroAsync(stream);
             aclco::CountZero<>
                 <<<aivCoreNum_, 0, stream>>>(Mask(), static_cast<uint32_t>(n), (uint32_t*)counter_.Data());
             for (size_t s = 0; s < a; ++s) {

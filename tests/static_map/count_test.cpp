@@ -12,6 +12,7 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 #include <unordered_set>
@@ -21,6 +22,23 @@
 #include "tests/common/generators.h"
 #include "tests/common/test_print.h" 
 #include "tests/common/dump_table.h"
+
+TEMPLATE_TEST_CASE("arg storage asynchronous zero reset", "[arg_storage]", uint32_t, uint64_t)
+{
+  aclco::test::AclGlobalGuard acl;
+  aclco::test::AclStreamGuard guard;
+  aclco::ArgStorage<TestType, TestType> counter;
+  for (auto stream : {aclrtStream(nullptr), guard.stream}) {
+    auto value = std::numeric_limits<TestType>::max();
+    counter.Initialize(value, stream);
+    REQUIRE(counter.LoadToHost(stream) == value);
+    counter.InitializeZeroAsync(stream);
+    aclco::test::Sync(stream);
+    REQUIRE(counter.LoadToHost(stream) == 0);
+    counter.Initialize(TestType(37), stream);
+    REQUIRE(counter.LoadToHost(stream) == 37);
+  }
+}
 namespace
 {
 template <typename K, typename V>

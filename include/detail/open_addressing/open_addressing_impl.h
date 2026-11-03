@@ -102,7 +102,7 @@ class OpenAddressingImpl {
       (uint8_t*)ioaCounterStorage_.Data());
 
     uint32_t ret = aclrtSynchronizeStream(stream);
-    CheckRet(ret, "StaticMap::InsertOrAssign::aclrtSynchronizeStream");
+    CheckRetOrThrow(ret, "StaticMap::InsertOrAssign::aclrtSynchronizeStream");
     uint64_t packed = ioaCounterStorage_.LoadToHost(stream);
     assignedNum = static_cast<SizeType>(packed >> 32);
     return static_cast<SizeType>(packed & 0xFFFFFFFFu);
@@ -143,7 +143,7 @@ class OpenAddressingImpl {
     if (valueNum == 0) { return 0; }
     if (values == nullptr) { return valueNum; }
     if (stencil == nullptr) { return valueNum; }
-    argStorage_.Initialize(0, stream);
+    argStorage_.InitializeZeroAsync(stream);
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
     aclco::InsertIf<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual, StencilT, Predicate><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
@@ -156,10 +156,10 @@ class OpenAddressingImpl {
 
     uint32_t ret = aclrtSynchronizeStream(stream);
     if (isPairV<ValueType>) {
-      CheckRet(ret, "StaticMap::InsertIf::aclrtSynchronizeStream");
+      CheckRetOrThrow(ret, "StaticMap::InsertIf::aclrtSynchronizeStream");
     }
     else {
-      CheckRet(ret, "StaticSet::InsertIf::aclrtSynchronizeStream");
+      CheckRetOrThrow(ret, "StaticSet::InsertIf::aclrtSynchronizeStream");
     }
     return argStorage_.LoadToHost(stream);
   }
@@ -199,7 +199,7 @@ class OpenAddressingImpl {
   {
     if (keyNum == 0) { return 0; }
     if (keys == nullptr) { return keyNum; }
-    argStorage_.Initialize(0, stream);
+    argStorage_.InitializeZeroAsync(stream);
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
     aclco::Erase<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
@@ -212,10 +212,10 @@ class OpenAddressingImpl {
 
     uint32_t ret = aclrtSynchronizeStream(stream); 
     if (isPairV<ValueType>) {
-      CheckRet(ret, "StaticMap::Erase::aclrtSynchronizeStream"); 
+      CheckRetOrThrow(ret, "StaticMap::Erase::aclrtSynchronizeStream");
     }
     else {
-      CheckRet(ret, "StaticSet::Erase::aclrtSynchronizeStream");     
+      CheckRetOrThrow(ret, "StaticSet::Erase::aclrtSynchronizeStream");
     }
     return argStorage_.LoadToHost(stream);
   }
@@ -394,7 +394,7 @@ class OpenAddressingImpl {
   {
     if (keyNum == 0) { return 0; }
     if (keys == nullptr) {return 0; }
-    argStorage_.Initialize(0, stream);
+    argStorage_.InitializeZeroAsync(stream);
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
     aclco::Count<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
@@ -406,10 +406,10 @@ class OpenAddressingImpl {
     
     uint32_t ret = aclrtSynchronizeStream(stream); 
     if (isPairV<ValueType>) {
-      CheckRet(ret, "StaticMap::Count::aclrtSynchronizeStream"); 
+      CheckRetOrThrow(ret, "StaticMap::Count::aclrtSynchronizeStream");
     }
     else {
-      CheckRet(ret, "StaticSet::Count::aclrtSynchronizeStream");     
+      CheckRetOrThrow(ret, "StaticSet::Count::aclrtSynchronizeStream");
     }
     return argStorage_.LoadToHost(stream);
   }
