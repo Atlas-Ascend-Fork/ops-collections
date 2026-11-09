@@ -54,10 +54,11 @@ class ArgStorage {
     return slots_.get();
   }
 
-  constexpr SizeType LoadToHost(aclrtStream stream = nullptr) const
+  constexpr ValueType LoadToHost(aclrtStream stream = nullptr) const
   {
-    SizeType hCount;
-    uint32_t ret = aclrtMemcpy((void*)&hCount, capacity_, (void*)slots_.get(), capacity_, ACL_MEMCPY_DEVICE_TO_HOST);
+    ValueType hCount{};
+    uint32_t ret = aclrtMemcpy((void*)&hCount, sizeof(hCount), (void*)slots_.get(), sizeof(hCount),
+                              ACL_MEMCPY_DEVICE_TO_HOST);
     CheckRetOrThrow(ret, "ArgStorage::LoadToHost");
     return hCount;
   }

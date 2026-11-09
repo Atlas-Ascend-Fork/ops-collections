@@ -11,13 +11,48 @@
 
 #include <acl/acl.h>
 #include <cstdint>
+#include <type_traits>
 #include <vector>
 
 #include "pair.h"
 #include "bucket_storage.h"
+#include "detail/storages/arg_storage.h"
 #include "utility/allocator.h"
 
 #include "../common/acl_env.h"
+
+namespace {
+template <typename T, typename Extent = std::uint32_t>
+void RequireArgStorageRoundTrip(T value)
+{
+  aclco::ArgStorage<T, Extent> storage;
+  static_assert(std::is_same_v<decltype(storage.LoadToHost()), T>, "readback must return the value type");
+  storage.Initialize(value);
+  REQUIRE(storage.LoadToHost() == value);
+  REQUIRE(storage.Capacity() == sizeof(T));
+}
+} // namespace
+
+TEST_CASE("ArgStorage LoadToHost preserves the value type and size", "[storage][arg_storage]")
+{
+  aclco::test::AclGlobalGuard aclGlobal{};
+
+  SECTION("uint32 value has the same width as the default extent") {
+    RequireArgStorageRoundTrip<std::uint32_t>(0xaabbccddU);
+  }
+  SECTION("uint64 value is wider than the default extent") {
+    RequireArgStorageRoundTrip<std::uint64_t>(0x1122334455667788ULL);
+  }
+  SECTION("float value retains its fractional part") {
+    RequireArgStorageRoundTrip<float>(1.5f);
+  }
+  SECTION("double value retains its sign and fractional part") {
+    RequireArgStorageRoundTrip<double>(-2.25);
+  }
+  SECTION("uint16 value is narrower than a uint64 extent") {
+    RequireArgStorageRoundTrip<std::uint16_t, std::uint64_t>(0xabcdu);
+  }
+}
 
 TEST_CASE("BucketStorage Initialize sets all values and capacity", "[storage]")
 {
