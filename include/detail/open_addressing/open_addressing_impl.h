@@ -456,7 +456,10 @@ class OpenAddressingImpl {
 
  protected:
   ValueType emptyValue_;
-  ArgStorage<SizeType, SizeType> argStorage_;
+  // The SIMT kernels update this counter through __gm__ uint32_t* (4-byte atomics).
+  ArgStorage<uint32_t, uint32_t> argStorage_;
+  static_assert(std::is_same_v<typename decltype(argStorage_)::ValueType, uint32_t>,
+                "counter storage must match the 32-bit kernel counter");
   ArgStorage<uint64_t, uint64_t> ioaCounterStorage_;
   ArgStorage<ValueType> emptyValueStorage_;
   ArgStorage<ValueType> erasedValueStorage_;
