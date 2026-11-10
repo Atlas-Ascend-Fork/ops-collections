@@ -11,6 +11,7 @@
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -22,6 +23,30 @@
 #include "tests/common/generators.h"
 #include "tests/common/test_print.h" 
 #include "tests/common/dump_table.h"
+
+TEST_CASE("StaticMap Count overwrites the previous single-warp result", "[static_map][count]")
+{
+  aclco::test::AclGlobalGuard acl;
+  aclco::test::AclStreamGuard guard;
+  auto sent = aclco::test::MakeDefaultSentinels<uint32_t, uint32_t>();
+  using Probe = aclco::test::map_factory::LinearProbing<uint32_t>;
+  auto map = aclco::test::map_factory::MakeStaticMap<uint32_t, uint32_t, 1, Probe>(128, sent, guard.stream);
+  using Extent = aclco::Extent<std::size_t>;
+  aclco::Pair<uint32_t, uint32_t> pair{1, 3};
+  aclco::test::DeviceBuffer<decltype(pair)> dPair(1);
+  dPair.CopyFromHostAsync(&pair, 1, guard.stream);
+  REQUIRE(map.Insert(dPair.Data(), Extent{1}, guard.stream) == 0);
+
+  std::array<uint32_t, 34> keys{};
+  keys.fill(1);
+  keys.back() = 2;
+  aclco::test::DeviceBuffer<uint32_t> dKeys(keys.size());
+  dKeys.CopyFromHostAsync(keys.data(), keys.size(), guard.stream);
+  CHECK(map.Count(dKeys.Data(), Extent{32}, guard.stream) == 32);
+  CHECK(map.Count(dKeys.Data() + 33, Extent{1}, guard.stream) == 0);
+  CHECK(map.Count(dKeys.Data(), Extent{34}, guard.stream) == 33);
+  CHECK(map.Count(dKeys.Data(), Extent{31}, guard.stream) == 31);
+}
 
 TEMPLATE_TEST_CASE("arg storage asynchronous zero reset", "[arg_storage]", uint32_t, uint64_t)
 {

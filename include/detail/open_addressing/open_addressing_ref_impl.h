@@ -9,6 +9,8 @@
  */
 #pragma once
 
+#include <cstddef>
+
 #include "kernel_operator.h"
 #include "macros.h"
 #include "detail/storages/bucket_storage_ref.h"
@@ -104,12 +106,30 @@ public:
     }
 
     template <typename Value>
+    COLLECTION_SIMT_DEVICE UintBySizeT<sizeof(Value)> PackCasExpected(
+        __gm__ UintBySizeT<sizeof(Value)>* slot, Value const& expected) noexcept
+    {
+        using PackedType = UintBySizeT<sizeof(Value)>;
+        if constexpr (isPairV<Value>) {
+            if constexpr (sizeof(Value) > sizeof(expected.first) + sizeof(expected.second)) {
+                // Clear writes the fields only. Use the slot's padding while still comparing both fields.
+                PackedType packed = *slot;
+                auto* bytes = reinterpret_cast<unsigned char*>(&packed);
+                __builtin_memcpy(bytes + offsetof(Value, first), &expected.first, sizeof(expected.first));
+                __builtin_memcpy(bytes + offsetof(Value, second), &expected.second, sizeof(expected.second));
+                return packed;
+            }
+        }
+        return *reinterpret_cast<PackedType const*>(&expected);
+    }
+
+    template <typename Value>
     COLLECTION_SIMT_DEVICE InsertResult PackCas(__gm__ Value* address, Value expected, Value desired) noexcept
     {
         using PackedType = UintBySizeT<sizeof(Value)>;
 
         __gm__ auto* slotPtr = reinterpret_cast<__gm__ PackedType*>(address);
-        PackedType packedExpected = *reinterpret_cast<PackedType*>(&expected);
+        PackedType packedExpected = PackCasExpected(slotPtr, expected);
         PackedType packedDesired = *reinterpret_cast<PackedType*>(&desired);
 
         auto oldSlot = AtomicCasWrap(slotPtr, packedExpected, packedDesired);
@@ -217,9 +237,8 @@ public:
         using PackedType = UintBySizeT<sizeof(Value)>;
 
         __gm__ auto* slotPtr = reinterpret_cast<__gm__ PackedType*>(address);
-        PackedType packedExpected{};
+        PackedType packedExpected = PackCasExpected(slotPtr, expected);
         PackedType packedDesired{};
-        *reinterpret_cast<Value*>(&packedExpected) = expected;
         *reinterpret_cast<Value*>(&packedDesired) = desired;
 
         auto oldSlot = AtomicCasWrap(slotPtr, packedExpected, packedDesired);

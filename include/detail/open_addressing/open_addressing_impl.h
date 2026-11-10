@@ -392,18 +392,24 @@ class OpenAddressingImpl {
 
   SizeType Count(void *keys, Extent keyNum, aclrtStream stream)
   {
-    if (keyNum == 0) { return 0; }
-    if (keys == nullptr) {return 0; }
-    argStorage_.InitializeZeroAsync(stream);
+    auto count = static_cast<uint32_t>(static_cast<SizeType>(keyNum));
+    if (count == 0 || keys == nullptr) {
+      return 0;
+    }
+    if (count > COUNT_WARP_SIZE) {
+      argStorage_.InitializeZeroAsync(stream);
+    }
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
-    aclco::Count<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<aivCoreNum, 0, stream>>>(
+    auto neededBlocks = 1U + (count - 1U) / COUNT_THREAD_NUM;
+    auto blocks = neededBlocks < aivCoreNum ? neededBlocks : aivCoreNum;
+    aclco::Count<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<blocks, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)keys,
       (uint32_t*)argStorage_.Data(),
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      keyNum);
-    
+      count);
+
     uint32_t ret = aclrtSynchronizeStream(stream); 
     if (isPairV<ValueType>) {
       CheckRetOrThrow(ret, "StaticMap::Count::aclrtSynchronizeStream");

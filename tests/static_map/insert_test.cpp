@@ -26,6 +26,45 @@ template <typename K, typename V>
 using Pair = aclco::Pair<K, V>;
 } // namespace
 
+TEMPLATE_TEST_CASE_SIG("StaticMap inserts into a slot with nonzero padding", "[static_map][insert][slot_padding]",
+  ((typename Key, typename Value, int BucketSize), Key, Value, BucketSize),
+  (uint8_t, uint32_t, 1), (int8_t, int32_t, 1))
+{
+  aclco::test::AclGlobalGuard acl;
+  aclco::test::AclStreamGuard guard;
+  using Extent = aclco::Extent<std::size_t>;
+  using Probe = aclco::test::map_factory::LinearProbing<Key>;
+  auto sent = aclco::test::MakeDefaultSentinels<Key, Value>();
+  auto map = aclco::test::map_factory::MakeStaticMap<Key, Value, BucketSize, Probe>(128, sent, guard.stream);
+  static_assert(sizeof(Pair<Key, Value>) > sizeof(Key) + sizeof(Value));
+  auto bytes = map.Capacity() * sizeof(Pair<Key, Value>);
+  aclco::test::CheckAcl(aclrtMemsetAsync(map.Data(), bytes, 0xA5, bytes, guard.stream), "seed slot padding");
+  map.Clear(guard.stream);
+
+  Pair<Key, Value> input{7, 31};
+  aclco::test::DeviceBuffer<Pair<Key, Value>> dPair(1);
+  dPair.CopyFromHostAsync(&input, 1, guard.stream);
+  SECTION("Insert") {
+    REQUIRE(map.Insert(dPair.Data(), Extent{1}, guard.stream) == 0);
+  }
+  SECTION("InsertOrAssign") {
+    REQUIRE(map.InsertOrAssign(dPair.Data(), Extent{1}, guard.stream) == 0);
+    input.second = 42;
+    dPair.CopyFromHostAsync(&input, 1, guard.stream);
+    REQUIRE(map.InsertOrAssign(dPair.Data(), Extent{1}, guard.stream) == 0);
+  }
+
+  aclco::test::DeviceBuffer<Key> dKey(1);
+  aclco::test::DeviceBuffer<Value> dOutput(1);
+  dKey.CopyFromHostAsync(&input.first, 1, guard.stream);
+  CHECK(map.Count(dKey.Data(), Extent{1}, guard.stream) == 1);
+  map.Find(dKey.Data(), dOutput.Data(), Extent{1}, guard.stream);
+  Value found{};
+  dOutput.CopyToHostAsync(&found, 1, guard.stream);
+  aclco::test::Sync(guard.stream);
+  CHECK(found == input.second);
+}
+
 TEMPLATE_TEST_CASE_SIG(
   "static_map insert correctness",
   "[static_map][insert]",

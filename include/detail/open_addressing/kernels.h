@@ -24,6 +24,8 @@ namespace aclco {
 constexpr uint32_t MAX_THREAD_NUM = 2048;
 constexpr uint32_t THREAD_NUM_LAUNCH_BOUND = 1024;
 constexpr uint32_t DEFAULT_THREAD_NUM = 1024;
+constexpr uint32_t COUNT_THREAD_NUM = 256;
+constexpr uint32_t COUNT_WARP_SIZE = 32;
 constexpr uint32_t BUFFER_NUM = 2;
 constexpr uint32_t BLOCK_SIZE = 32;
 
@@ -432,6 +434,11 @@ COLLECTION_SIMT_VF LAUNCH_BOUND(THREAD_NUM_LAUNCH_BOUND) inline void CountSimt(
   uint32_t globalThreadIdx = blockIndex * AscendC::Simt::GetThreadNum() + AscendC::Simt::GetThreadIdx();
   uint32_t totalThreadNum = blockNumber * AscendC::Simt::GetThreadNum();
 
+  uint32_t lane = AscendC::Simt::GetThreadIdx() % COUNT_WARP_SIZE;
+  if (globalThreadIdx - lane >= keyNum) {
+    return;
+  }
+
   using StorageRefType = aclco::BucketStorageRef<Value, BucketSize>;
   using ProbingSchemeType = ProbingScheme;
   using RefType = typename std::conditional<!isPairV<Value>,
@@ -443,9 +450,19 @@ COLLECTION_SIMT_VF LAUNCH_BOUND(THREAD_NUM_LAUNCH_BOUND) inline void CountSimt(
   KeyEqual predicate = {};
   RefType ref(*((__gm__ Value*)emptyValue), predicate, probingScheme, tableRef);
 
-  for (uint32_t i = globalThreadIdx; i < keyNum; i = i + totalThreadNum) {
+  uint32_t localCount = 0;
+  for (uint32_t i = globalThreadIdx; i < keyNum; i += totalThreadNum) {
     Key targetKey = *((__gm__ Key*)(keys) + i);
-    AscendC::Simt::AtomicAdd(outputNum, ref.Count(targetKey)); 
+    localCount += ref.Count(targetKey);
+  }
+  uint32_t warpCount = AscendC::Simt::WarpReduceAddSync(localCount);
+  if (lane == 0) {
+    if (keyNum <= COUNT_WARP_SIZE) {
+      // A single warp owns the entire result, including a count of zero.
+      *outputNum = warpCount;
+    } else if (warpCount != 0) {
+      AscendC::Simt::AtomicAdd(outputNum, warpCount);
+    }
   }
 }
 
@@ -619,7 +636,7 @@ COLLECTION_AIV_GLOBAL void Count(__gm__ uint8_t *table, __gm__ uint8_t *keys,
                                                        __gm__ uint32_t *outputNum, __gm__ uint8_t *emptyValue,
                                                        uint32_t tableSize, uint32_t keyNum)
 {
-  AscendC::Simt::VF_CALL<CountSimt<Key, Value, BucketSize, ProbingScheme, KeyEqual>>(AscendC::Simt::Dim3{DEFAULT_THREAD_NUM},
+  AscendC::Simt::VF_CALL<CountSimt<Key, Value, BucketSize, ProbingScheme, KeyEqual>>(AscendC::Simt::Dim3{COUNT_THREAD_NUM},
     table, keys, outputNum, emptyValue, tableSize, keyNum);
 }
 }
