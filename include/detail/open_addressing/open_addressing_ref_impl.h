@@ -290,7 +290,7 @@ public:
         return InsertOrAssignVerdict(value) != InsertResult::FAILED;
     }
 
-    /** @brief 三态返回：SUCCESS=插入新 key，DUPLICATE=已存在 key 的 assign，FAILED=表满。
+    /** @brief 三态返回：SUCCESS=插入新 key，DUPLICATE=已存在 key 的 assign，FAILED=保留空键或表满。
      *  纯返回值（不带引用出参，避免 SIMT 线程私有内存 spill 拖慢热循环）。 */
     template <typename Value>
     COLLECTION_SIMT_DEVICE InsertResult InsertOrAssignVerdict(Value value)
@@ -301,9 +301,13 @@ public:
     template <typename Value>
     COLLECTION_SIMT_DEVICE Pair<PayloadType, bool> InsertAndFind(Value value)
     {
+        auto const key = this->ExtractKey(value);
+        if (predicate_.IsSentinelValue(key, this->ExtractKey(emptySlotValue_))) {
+            return {ExtractValue(emptySlotValue_), false};
+        }
+
         __gm__ Value* tableHandle = storageRef_.Data();
         SizeType tableSize = storageRef_.Capacity();
-        auto const key = this->ExtractKey(value);
 
         auto probingIter = probingScheme_.template MakeIterator<bucketSize>(key, tableSize);
         auto const initIdx = *probingIter;
@@ -485,9 +489,14 @@ private:
     template <bool assign, typename Value>
     COLLECTION_SIMT_DEVICE InsertResult InsertVerdict(Value value)
     {
+        auto const key = this->ExtractKey(value);
+        auto const emptyKey = this->ExtractKey(emptySlotValue_);
+        if (predicate_.IsSentinelValue(key, emptyKey)) {
+            return InsertResult::FAILED;
+        }
+
         __gm__ Value* tableHandle = storageRef_.Data();
         SizeType tableSize = storageRef_.Capacity();
-        auto const key = this->ExtractKey(value);
         auto probingIter = probingScheme_.template MakeIterator<bucketSize>(key, tableSize);
         auto const initIdx = *probingIter;
 
@@ -496,7 +505,7 @@ private:
             for (size_t i = 0; i < bucketSize; i++) {
                 auto const slotContent = *(bucketSlotsAddr + i);
                 EqualResult insertFlag = predicate_.template operator()<IsInsert::YES>(
-                    key, this->ExtractKey(slotContent), this->ExtractKey(emptySlotValue_));
+                    key, this->ExtractKey(slotContent), emptyKey);
                 if (insertFlag == EqualResult::EQUAL) {
                     if constexpr (assign) {
                         AssignPayload(bucketSlotsAddr + i, value);

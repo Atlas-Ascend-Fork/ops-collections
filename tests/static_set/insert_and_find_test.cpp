@@ -11,6 +11,10 @@
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+
 #include "tests/common/acl_env.h"
 #include "tests/common/device_buffer.h"
 #include "tests/common/generators.h"
@@ -154,4 +158,45 @@ TEMPLATE_TEST_CASE_SIG(
       REQUIRE_PRINT((dupOutputInsert[i] != 0) == goldenAll[uniqueN + i].second);
     }
   }
+}
+
+TEST_CASE("StaticSet InsertAndFind rejects the reserved empty key", "[static_set][insert_and_find][empty_key]")
+{
+  using Key = std::uint32_t;
+  using Extent = aclco::Extent<std::size_t>;
+  const Key emptyKey = GENERATE(Key{0}, std::numeric_limits<Key>::max());
+  const bool async = GENERATE(false, true);
+  constexpr Key validKey = 12345;
+  CAPTURE(emptyKey, async);
+
+  aclco::test::AclGlobalGuard acl;
+  aclco::test::AclStreamGuard guard;
+  auto stream = guard.stream;
+  aclco::StaticSet<Key> table{Extent{1000}, emptyKey};
+  const Key query[] = {emptyKey, validKey};
+  aclco::test::DeviceBuffer<Key> keys(2), found(2);
+  aclco::test::DeviceBuffer<unsigned char> inserted(2), present(2);
+  keys.CopyFromHostAsync(query, 2, stream);
+
+  if (async) {
+    table.InsertAndFindAsync(keys.Data(), found.Data(), inserted.Data(), Extent{2}, stream);
+  } else {
+    table.InsertAndFind(keys.Data(), found.Data(), inserted.Data(), Extent{2}, stream);
+  }
+  const auto insertFlags = inserted.CopyToHost(stream);
+  const auto insertValues = found.CopyToHost(stream);
+  CHECK(insertFlags[0] == 0);
+  CHECK(insertFlags[1] == 1);
+  CHECK(insertValues[0] == emptyKey);
+  CHECK(insertValues[1] == validKey);
+
+  table.Find(keys.Data(), found.Data(), Extent{2}, stream);
+  table.Contains(keys.Data(), present.Data(), Extent{2}, stream);
+  const auto foundValues = found.CopyToHost(stream);
+  const auto presentFlags = present.CopyToHost(stream);
+  CHECK(foundValues[0] == emptyKey);
+  CHECK(foundValues[1] == validKey);
+  CHECK(presentFlags[0] == 0);
+  CHECK(presentFlags[1] == 1);
+  CHECK(table.Count(keys.Data(), Extent{1}, stream) == 0);
 }

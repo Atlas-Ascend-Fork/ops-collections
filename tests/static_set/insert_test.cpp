@@ -11,6 +11,10 @@
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+
 #include "tests/common/acl_env.h"
 #include "tests/common/device_buffer.h"
 #include "tests/common/generators.h"
@@ -255,4 +259,25 @@ TEMPLATE_TEST_CASE_SIG(
   bool ok = aclco::test::EqualAsSet<Key>(observed, golden, &diff);
   INFO(diff);
   REQUIRE_PRINT(ok);
+}
+
+TEST_CASE("StaticSet Insert counts a reserved empty key as failed", "[static_set][insert][empty_key]")
+{
+  using Key = std::uint32_t;
+  using Extent = aclco::Extent<std::size_t>;
+  const Key emptyKey = GENERATE(Key{0}, std::numeric_limits<Key>::max());
+  constexpr Key validKey = 12345;
+  CAPTURE(emptyKey);
+
+  aclco::test::AclGlobalGuard acl;
+  aclco::test::AclStreamGuard guard;
+  auto stream = guard.stream;
+  aclco::StaticSet<Key> set{Extent{1000}, emptyKey};
+  const Key input[] = {emptyKey, validKey};
+  aclco::test::DeviceBuffer<Key> keys(2);
+  keys.CopyFromHostAsync(input, 2, stream);
+
+  CHECK(set.Insert(keys.Data(), Extent{2}, stream) == 1);
+  CHECK(set.Count(keys.Data(), Extent{1}, stream) == 0);
+  CHECK(set.Count(keys.Data(), Extent{2}, stream) == 1);
 }

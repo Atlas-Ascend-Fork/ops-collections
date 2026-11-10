@@ -11,6 +11,10 @@
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+
 #include "tests/common/acl_env.h"
 #include "tests/common/device_buffer.h"
 #include "tests/common/generators.h"
@@ -248,4 +252,39 @@ TEMPLATE_TEST_CASE_SIG(
                                    aclco::Extent<std::size_t>(n), stream);
     REQUIRE_PRINT(fail == 0);
   }
+}
+
+TEST_CASE("StaticMap InsertOrAssign counts a reserved empty key as failed",
+          "[static_map][insert_or_assign][empty_key]")
+{
+  using Key = std::uint32_t;
+  using Extent = aclco::Extent<std::size_t>;
+  const Key emptyKey = GENERATE(Key{0}, std::numeric_limits<Key>::max());
+  constexpr Key emptyValue = 222;
+  constexpr Key validKey = 12345;
+  CAPTURE(emptyKey);
+
+  aclco::test::AclGlobalGuard acl;
+  aclco::test::AclStreamGuard guard;
+  auto stream = guard.stream;
+  aclco::StaticMap<Key, Key> map{Extent{1000}, emptyKey, emptyValue};
+  Pair<Key, Key> input[] = {{emptyKey, 123}, {validKey, 777}};
+  aclco::test::DeviceBuffer<Pair<Key, Key>> values(2);
+  values.CopyFromHostAsync(input, 2, stream);
+  std::size_t assigned = 0;
+  CHECK(map.InsertOrAssign(values.Data(), Extent{2}, stream, assigned) == 1);
+  CHECK(assigned == 0);
+
+  input[1].second = 888;
+  values.CopyFromHostAsync(input, 2, stream);
+  CHECK(map.InsertOrAssign(values.Data(), Extent{2}, stream, assigned) == 1);
+  CHECK(assigned == 1);
+
+  const Key query[] = {emptyKey, validKey};
+  aclco::test::DeviceBuffer<Key> keys(2), found(2);
+  keys.CopyFromHostAsync(query, 2, stream);
+  map.Find(keys.Data(), found.Data(), Extent{2}, stream);
+  const auto output = found.CopyToHost(stream);
+  CHECK(output[0] == emptyValue);
+  CHECK(output[1] == input[1].second);
 }
