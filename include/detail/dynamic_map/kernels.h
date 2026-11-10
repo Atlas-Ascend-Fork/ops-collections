@@ -9,6 +9,9 @@
  */
 #pragma once
 
+#include <type_traits>
+
+#include "detail/bitwise_compare.h"
 #include "detail/open_addressing/kernels.h"
 #include "kernel_operator.h"
 
@@ -81,7 +84,12 @@ COLLECTION_SIMT_VF LAUNCH_BOUND(THREAD_NUM_LAUNCH_BOUND) inline void MergeFindSi
     for (uint32_t i = globalIdx; i < n; i += totalThreads)
     {
         Value cur = *((__gm__ Value*)out + i);
-        if (cur == empty)
+        bool isEmpty = cur == empty;
+        if constexpr (std::is_floating_point_v<Value>) {
+            // NaN sentinels match the original object representation, including the payload bits.
+            isEmpty = isEmpty || (empty != empty && detail::BitWiseCompare(cur, empty));
+        }
+        if (isEmpty)
         {
             *((__gm__ Value*)out + i) = *((__gm__ Value*)tmp + i);
         }

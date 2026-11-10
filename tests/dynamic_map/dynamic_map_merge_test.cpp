@@ -10,7 +10,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_template_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -103,4 +107,42 @@ TEMPLATE_TEST_CASE_SIG("dynamic_map multi non-empty submap merge", "[dynamic_map
         if ((outC[i] != 0) != exp) ++cErr;
     }
     REQUIRE(cErr == 0);
+}
+
+TEST_CASE("dynamic_map Find merges later hits with a floating-point empty value", "[dynamic_map][merge][float_sentinel]")
+{
+    aclco::test::AclGlobalGuard acl;
+    aclco::test::AclStreamGuard guard;
+    using Key = uint32_t;
+    using Extent = aclco::Extent<std::size_t>;
+    using Map = aclco::DynamicMap<Key, float, Extent, aclco::EqualTo<Key>,
+                                 aclco::LinearProbing<aclco::murmurhash3_32<Key>>, aclco::Storage<1>>;
+    const auto sent = aclco::test::MakeDefaultSentinels<Key, float>();
+    const bool useNaN = GENERATE(false, true);
+    const auto empty = useNaN ? std::numeric_limits<float>::quiet_NaN() : -999.0f;
+    CAPTURE(useNaN);
+    Map map(Extent{40000}, sent.emptyKey, empty, sent.erasedKey, {}, {}, {}, guard.stream);
+
+    const std::array<Pair<Key, float>, 2> pairs{{{7, 11.0f}, {42, 42.0f}}};
+    aclco::test::DeviceBuffer<Pair<Key, float>> dPairs(pairs.size());
+    dPairs.CopyFromHostAsync(pairs.data(), pairs.size(), guard.stream);
+    REQUIRE(map.Insert(dPairs.Data(), Extent{1}, guard.stream) == 1);
+    REQUIRE(map.NumSubmaps() == 1);
+    map.Reserve(20000, guard.stream);
+    REQUIRE(map.NumSubmaps() == 2);
+    // The keys are distinct. Append the second key directly to the new active submap.
+    REQUIRE(map.Insert(dPairs.Data() + 1, Extent{1}, guard.stream, Map::InsertMode::kAppendUnique) == 1);
+
+    constexpr std::array<Key, 3> keys{7, 42, 999};
+    std::array<float, keys.size()> values{};
+    aclco::test::DeviceBuffer<Key> dKeys(keys.size());
+    aclco::test::DeviceBuffer<float> dValues(keys.size());
+    dKeys.CopyFromHostAsync(keys.data(), keys.size(), guard.stream);
+    map.Find(dKeys.Data(), dValues.Data(), Extent{keys.size()}, guard.stream);
+    dValues.CopyToHostAsync(values.data(), values.size(), guard.stream);
+    aclco::test::Sync(guard.stream);
+
+    CHECK(values[0] == 11.0f);
+    CHECK(values[1] == 42.0f);
+    CHECK((useNaN ? std::isnan(values[2]) : values[2] == empty));
 }
