@@ -210,13 +210,24 @@ void RoaringBitmap<Key, Extent, Allocator>::Initialize(void const* bitmap, size_
         allocationBytes_ = bucketsOffset_ + parsed.buckets.size() * sizeof(detail::RoaringBitmapBucket);
     }
 
+    constexpr size_t alignment = std::is_same_v<Key, uint32_t> ? alignof(detail::RoaringBitmapMetadata32) :
+        std::max(alignof(detail::RoaringBitmapMetadata64), alignof(detail::RoaringBitmapBucket));
+    if (allocationBytes_ > std::numeric_limits<size_t>::max() - (alignment - 1)) {
+        throw std::invalid_argument("RoaringBitmap: device allocation size overflow");
+    }
+    allocationBytes_ += alignment - 1;
     allocation_ = allocator_.Allocate(allocationBytes_);
     if (allocation_ == nullptr) {
         throw std::bad_alloc{};
     }
 
+    // Keep the serialized bytes at the allocator's address and align the typed metadata independently.
+    const auto base = reinterpret_cast<uintptr_t>(allocation_);
+    const size_t padding = (alignment - base % alignment) % alignment;
+    metadataOffset_ += padding;
+    bucketsOffset_ += padding;
+
     if constexpr (std::is_same_v<Key, uint32_t>) {
-        uintptr_t base = reinterpret_cast<uintptr_t>(allocation_);
         parsed.metadata.aligned16 = static_cast<uint8_t>((base + parsed.metadata.keyCards) % alignof(uint16_t) == 0);
         parsed.metadata.offsetsAligned = static_cast<uint8_t>(
             parsed.metadata.offsetsInSerializedData != 0 &&
