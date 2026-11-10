@@ -598,6 +598,13 @@ class StaticMap {
   ValueType* Data() const;
 
  private:
+  template <class, class, class, class, class, class>
+  friend class DynamicMap;
+
+  struct DeferredClear {};
+  constexpr StaticMap(DeferredClear, Extent capacity, Key emptyKey, T emptyValue, Key erasedKey, KeyEqual const& pred,
+                      ProbingScheme const& probingScheme, aclrtStream stream);
+
   std::unique_ptr<ImplType> impl_;
   Key emptyKey_;
   T emptyValue_;

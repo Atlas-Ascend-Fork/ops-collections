@@ -41,6 +41,33 @@ template <class Key,
           class KeyEqual,
           class ProbingScheme,
           class Storage>
+constexpr StaticMap<Key, T, Extent, KeyEqual, ProbingScheme, Storage>::
+  StaticMap(DeferredClear,
+            Extent capacity,
+            Key emptyKey,
+            T emptyValue,
+            Key erasedKey,
+            KeyEqual const& pred,
+            ProbingScheme const& probingScheme,
+            aclrtStream stream)
+  : impl_{std::make_unique<ImplType>(capacity,
+                                     Pair{emptyKey, emptyValue},
+                                     Pair{erasedKey, emptyValue},
+                                     pred,
+                                     probingScheme,
+                                     stream,
+                                     false)},
+    emptyKey_{emptyKey},
+    emptyValue_{emptyValue}
+{
+}
+
+template <class Key,
+          class T,
+          class Extent,
+          class KeyEqual,
+          class ProbingScheme,
+          class Storage>
 void StaticMap<Key, T, Extent, KeyEqual, ProbingScheme, Storage>::
   SetErasedKey(Key erasedKey, aclrtStream stream)
 {

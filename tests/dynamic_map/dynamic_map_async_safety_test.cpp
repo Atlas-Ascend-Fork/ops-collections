@@ -9,10 +9,12 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
+#include <array>
 #include <cstdint>
 #include <random>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "dynamic_map.h"
@@ -148,4 +150,62 @@ TEST_CASE("async batched insert unique WITH growth safety", "[dynamic_map][async
     INFO("async-grow notFound=" << notFound << " wrongVal=" << wrongVal << " submaps=" << map.NumSubmaps());
     REQUIRE(notFound == 0);
     REQUIRE(wrongVal == 0);
+}
+
+TEST_CASE("dynamic_map owns a prebuilt submap until it is ready", "[dynamic_map][asyncsafe][prebuild]")
+{
+    aclco::test::AclGlobalGuard acl;
+    aclco::test::AclStreamGuard guard;
+    using Extent = aclco::Extent<std::size_t>;
+    const auto sent = aclco::test::MakeDefaultSentinels<K, V>();
+    constexpr std::size_t prefill = 10000;
+    constexpr std::size_t trigger = 3000;
+    constexpr std::size_t larger = 50000;
+    constexpr std::size_t total = prefill + trigger + larger;
+    std::vector<PairKV> pairs(total);
+    for (std::size_t i = 0; i < pairs.size(); ++i) {
+        pairs[i] = {static_cast<K>(i), static_cast<V>(i + 100)};
+    }
+    aclco::test::DeviceBuffer<PairKV> dPairs(pairs.size());
+    dPairs.CopyFromHostAsync(pairs.data(), pairs.size(), guard.stream);
+
+    DMap map(Extent{40000}, sent.emptyKey, sent.emptyValue, sent.erasedKey, {}, {}, {}, guard.stream);
+    REQUIRE(map.Insert(dPairs.Data(), Extent{prefill}, guard.stream, DMap::InsertMode::kAppendUnique) == prefill);
+    // Usable capacity is 14000. The next batch fits, but leaves less room than another batch needs.
+    REQUIRE(map.InsertAsync(dPairs.Data() + prefill, Extent{trigger}, guard.stream) == trigger);
+    REQUIRE(map.NumSubmaps() == 1);
+
+    auto check = [&](DMap& current, K last, bool present) {
+        const std::array<K, 3> keys{0, last, static_cast<K>(total + 1)};
+        std::array<V, 3> values{};
+        aclco::test::DeviceBuffer<K> dKeys(keys.size());
+        aclco::test::DeviceBuffer<V> dValues(values.size());
+        dKeys.CopyFromHostAsync(keys.data(), keys.size(), guard.stream);
+        current.Find(dKeys.Data(), dValues.Data(), Extent{keys.size()}, guard.stream);
+        dValues.CopyToHostAsync(values.data(), values.size(), guard.stream);
+        aclco::test::Sync(guard.stream);
+        CHECK(values[0] == (present ? 100U : sent.emptyValue));
+        CHECK(values[1] == (present ? last + 100 : sent.emptyValue));
+        CHECK(values[2] == sent.emptyValue);
+    };
+
+    SECTION("activate after moving the map") {
+        auto moved = std::move(map);
+        REQUIRE(moved.InsertAsync(dPairs.Data() + prefill + trigger, Extent{trigger}, guard.stream) == trigger);
+        REQUIRE(moved.NumSubmaps() == 2);
+        check(moved, prefill + 2 * trigger - 1, true);
+    }
+    SECTION("discard a prepared submap that is too small") {
+        REQUIRE(map.InsertAsync(dPairs.Data() + prefill + trigger, Extent{larger}, guard.stream) == larger);
+        REQUIRE(map.NumSubmaps() == 2);
+        check(map, total - 1, true);
+    }
+    SECTION("clear with a prepared submap") {
+        map.Clear(guard.stream);
+        CHECK(map.Size() == 0);
+        check(map, prefill + trigger - 1, false);
+    }
+    SECTION("destroy with a prepared submap") {
+        aclco::test::Sync(guard.stream);
+    }
 }

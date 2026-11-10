@@ -44,8 +44,52 @@ public:
     DynamicMap(const DynamicMap&) = delete;
     DynamicMap& operator=(const DynamicMap&) = delete;
     DynamicMap(DynamicMap&&) = default;
-    DynamicMap& operator=(DynamicMap&&) = default;
-    ~DynamicMap() = default;
+    DynamicMap& operator=(DynamicMap&& other) noexcept
+    {
+        if (this != &other) {
+            // noexcept 下不能走会抛异常的 DiscardPreparedSubmap：与 ~DynamicMap 一致，
+            // 等待本对象预建流上的在途清表完成后再释放旧 nextSubmap_（同步失败按析构同策略忽略）。
+            if (nextSubmap_)
+                (void)aclrtSynchronizeStream(prepStream_);
+            nextSubmap_.reset();
+            nextSubmapCap_ = 0;
+            submaps_ = std::move(other.submaps_);
+            submapSize_ = std::move(other.submapSize_);
+            size_ = other.size_;
+            totalCapacity_ = other.totalCapacity_;
+            nextCapacity_ = other.nextCapacity_;
+            minInsertSize_ = other.minInsertSize_;
+            maxLoadFactor_ = other.maxLoadFactor_;
+            emptyKey_ = std::move(other.emptyKey_);
+            emptyValue_ = std::move(other.emptyValue_);
+            erasedKey_ = std::move(other.erasedKey_);
+            pred_ = std::move(other.pred_);
+            probingScheme_ = std::move(other.probingScheme_);
+            storage_ = std::move(other.storage_);
+            dEmptyValue_ = std::move(other.dEmptyValue_);
+            dScratch_ = std::move(other.dScratch_);
+            dDedup_ = std::move(other.dDedup_);
+            scratchBytes_ = other.scratchBytes_;
+            dedupBytes_ = other.dedupBytes_;
+            keysBytes_ = other.keysBytes_;
+            maskBytes_ = other.maskBytes_;
+            counter_ = std::move(other.counter_);
+            nextSubmap_ = std::move(other.nextSubmap_);
+            nextSubmapCap_ = other.nextSubmapCap_;
+            prepStreamHolder_ = std::move(other.prepStreamHolder_);
+            prepEventHolder_ = std::move(other.prepEventHolder_);
+            prepStream_ = other.prepStream_;
+            prepEvent_ = other.prepEvent_;
+            aivCoreNum_ = other.aivCoreNum_;
+        }
+        return *this;
+    }
+    ~DynamicMap()
+    {
+        if (nextSubmap_) {
+            (void)aclrtSynchronizeStream(prepStream_);
+        }
+    }
 
     DynamicMap(Extent initialCapacity, Key emptyKey, T emptyValue, Key erasedKey, KeyEqual const& pred = {},
                ProbingScheme const& ps = {}, Storage storage = {}, aclrtStream stream = nullptr)
@@ -304,12 +348,7 @@ public:
 
     void Clear(aclrtStream stream)
     {
-        if (nextSubmap_ && prepStream_ != nullptr) // 预建子表可能仍在后台流构建，先同步再释放
-        {
-            CheckRet(aclrtSynchronizeStream(prepStream_), "DynamicMap::Clear::aclrtSynchronizeStream");
-        }
-        nextSubmap_.reset();
-        nextSubmapCap_ = 0;
+        DiscardPreparedSubmap();
         for (auto& sm : submaps_)
             sm->Clear(stream);
         for (auto& s : submapSize_)
@@ -417,7 +456,16 @@ private:
         return (usable > submapSize_[a]) ? (usable - submapSize_[a]) : 0;
     }
 
-    /** @brief 后台流上预建下一子表（构造含全表 Clear，与插入流重叠，消增长停顿）。 */
+    void DiscardPreparedSubmap()
+    {
+        if (nextSubmap_) {
+            CheckRetOrThrow(aclrtSynchronizeStream(prepStream_), "DynamicMap::DiscardPreparedSubmap");
+            nextSubmap_.reset();
+        }
+        nextSubmapCap_ = 0;
+    }
+
+    /** @brief 在后台流排入下一子表的清表操作，激活时由插入流等待完成事件。 */
     void StartPrepareNext(SizeType minUsable)
     {
         if (nextSubmap_ || prepStream_ == nullptr)
@@ -425,18 +473,22 @@ private:
         SizeType newCap = nextCapacity_;
         while (Usable(newCap) < GrowTarget(minUsable))
             newCap *= GROWTH_FACTOR;
-        nextSubmap_ = std::make_unique<MapType>(Extent{newCap}, emptyKey_, emptyValue_, pred_, probingScheme_, storage_,
-                                                prepStream_);
-        nextSubmap_->SetErasedKey(erasedKey_, prepStream_); // 启用墓碑删除
+        nextSubmap_.reset(new MapType(typename MapType::DeferredClear{}, Extent{newCap}, emptyKey_, emptyValue_,
+                                      erasedKey_, pred_, probingScheme_, prepStream_));
+        nextSubmap_->ClearAsync(prepStream_);
+        auto ret = aclrtRecordEvent(prepEvent_, prepStream_);
+        if (ret != ACL_SUCCESS) {
+            DiscardPreparedSubmap();
+            CheckRetOrThrow(ret, "DynamicMap::StartPrepareNext::aclrtRecordEvent");
+        }
         nextSubmapCap_ = newCap;
-        CheckRet(aclrtRecordEvent(prepEvent_, prepStream_), "DynamicMap::StartPrepareNext::aclrtRecordEvent");
     }
 
     /** @brief 激活预建子表（插入流等待预建完成事件），无预建则同步建。 */
     void ActivateNext(SizeType minUsable, aclrtStream stream)
     {
         if (nextSubmap_ && Usable(nextSubmapCap_) >= minUsable) {
-            CheckRet(aclrtStreamWaitEvent(stream, prepEvent_), "DynamicMap::ActivateNext::aclrtStreamWaitEvent");
+            CheckRetOrThrow(aclrtStreamWaitEvent(stream, prepEvent_), "DynamicMap::ActivateNext::aclrtStreamWaitEvent");
             submaps_.push_back(std::move(nextSubmap_));
             submapSize_.push_back(0);
             totalCapacity_ += submaps_.back()->Capacity();
@@ -444,7 +496,7 @@ private:
             nextSubmapCap_ = 0; // 预建表已激活，清空其容量记录
             return;
         }
-        nextSubmap_.reset(); // 容量不够的预建表丢弃
+        DiscardPreparedSubmap(); // 容量不够的预建表丢弃
         SizeType newCap = nextCapacity_;
         while (Usable(newCap) < minUsable)
             newCap *= GROWTH_FACTOR;

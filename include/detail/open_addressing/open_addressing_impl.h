@@ -50,15 +50,27 @@ class OpenAddressingImpl {
                               KeyEqual const& pred,
                               ProbingScheme const& probingScheme,
                               aclrtStream stream)
+    : OpenAddressingImpl(capacity, emptyValue, emptyValue, pred, probingScheme, stream, true)
+  {
+  }
+
+  constexpr OpenAddressingImpl(Extent capacity,
+                              Value emptyValue,
+                              Value erasedValue,
+                              KeyEqual const& pred,
+                              ProbingScheme const& probingScheme,
+                              aclrtStream stream,
+                              bool clearOnConstruction)
     : probingScheme_{probingScheme},
       storage_{MakeValidExtent<ProbingScheme, Storage>(capacity), DefaultAllocator<ValueType>()},
       emptyValue_{reinterpret_cast<ValueType&>(emptyValue)},
       predicate_{pred}
   {
     emptyValueStorage_.Initialize(reinterpret_cast<ValueType&>(emptyValue), stream);
-    // 墓碑值默认等于空值；上层配置 erasedKey 后调用 SetErasedValue 切换到墓碑删除。
-    erasedValueStorage_.Initialize(reinterpret_cast<ValueType&>(emptyValue), stream);
-    this->Clear(stream);
+    erasedValueStorage_.Initialize(reinterpret_cast<ValueType&>(erasedValue), stream);
+    if (clearOnConstruction) {
+      this->Clear(stream);
+    }
   }
 
   /** @brief 配置删除墓碑值（key 应为保留的 erasedKey，与 emptyKey、任何有效 key 都不同）。 */
