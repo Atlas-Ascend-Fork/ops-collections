@@ -11,9 +11,11 @@
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "tests/common/acl_env.h"
 #include "tests/common/device_buffer.h"
@@ -22,6 +24,26 @@
 #include "tests/common/matchers.h"
 #include "tests/common/generators.h"
 #include "tests/common/test_print.h"
+
+TEST_CASE("ClearSIMD clears the last complete tile", "[static_set][clear][clear_tail]")
+{
+  aclco::test::AclGlobalGuard acl;
+  aclco::test::AclStreamGuard stream;
+  constexpr uint32_t tileSize = 64;
+  constexpr uint32_t empty = 0xFFFFFFFFu;
+  const auto tail = GENERATE(0u, 32u);
+  const auto count = tileSize + (tail == 0 ? tileSize : tail);
+  std::vector<uint32_t> slots(count, 17u);
+  aclco::test::DeviceBuffer<uint32_t> table(count);
+  table.CopyFromHostAsync(slots.data(), count, stream.stream);
+
+  aclco::ClearSIMD<uint32_t><<<1, 0, stream.stream>>>(reinterpret_cast<uint8_t*>(table.Data()), empty,
+      count, 2, tail, 0, 0, 0, tileSize, 0);
+  table.CopyToHostAsync(slots.data(), count, stream.stream);
+  aclco::test::Sync(stream.stream);
+
+  CHECK(std::all_of(slots.begin(), slots.end(), [](auto slot) { return slot == empty; }));
+}
 
 TEMPLATE_TEST_CASE_SIG(
   "static_set clear correctness (sync Clear)",

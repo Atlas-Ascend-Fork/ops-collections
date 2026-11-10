@@ -509,7 +509,7 @@ __vector__ __global__ __aicore__ void ClearSIMD(__gm__ uint8_t *table, Key empty
   tableQueue.EnQue(tableLocal);
   tableLocal = tableQueue.DeQue<KeyType>();
   for (uint32_t i = 0; i < loopCount; i++) {
-    if (i == tileNum - 1) {
+    if (i == tileNum - 1 && tailDataNum != 0) {
       processDataNum = tailDataNum;
     }
     AscendC::DataCopy(tableGM[i * tileDataNum], tableLocal, processDataNum);
