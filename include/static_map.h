@@ -22,6 +22,10 @@
 namespace aclco {
 static constexpr size_t defaultMapBucketSize = 5;
 
+/**
+ * @note 提交的批次若超过内核 32 位索引的安全范围（2^32 减去本次启动的总线程数），
+ * 同步和异步接口均在主机端抛出 std::length_error。
+ */
 template <class Key,
           class T,
           class Extent = Extent<size_t>,

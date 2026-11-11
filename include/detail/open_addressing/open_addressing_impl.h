@@ -9,6 +9,10 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <limits>
+#include <stdexcept>
+
 #include "bucket_storage.h"
 #include "detail/storages/arg_storage.h"
 #include "kernels.h"
@@ -103,14 +107,15 @@ class OpenAddressingImpl {
     if (valueNum == 0) { return 0; }
     if (values == nullptr) { return valueNum; }
     // failed/assigned 打包进单个 64bit 计数（低 32 failed、高 32 assigned）：每批仅 1 次 init + 1 次回读
-    ioaCounterStorage_.Initialize(0, stream);
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(valueNum, aivCoreNum);
+    ioaCounterStorage_.Initialize(0, stream);
     aclco::InsertOrAssign<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)values,
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      valueNum,
+      batchSize,
       (uint8_t*)ioaCounterStorage_.Data());
 
     uint32_t ret = aclrtSynchronizeStream(stream);
@@ -125,12 +130,13 @@ class OpenAddressingImpl {
     if (valueNum == 0) { return; }
     if (values == nullptr) { return; }
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(valueNum, aivCoreNum);
     aclco::InsertOrAssignAsync<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)values,
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      valueNum);
+      batchSize);
   }
 
   template <typename StencilT, typename Predicate>
@@ -139,13 +145,14 @@ class OpenAddressingImpl {
     if (valueNum == 0) { return; }
     if (values == nullptr || stencil == nullptr) { return; }
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(valueNum, aivCoreNum);
     aclco::AssignIfAsync<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual, StencilT, Predicate><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)values,
       (uint8_t*)stencil,
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      valueNum);
+      batchSize);
   }
 
 
@@ -155,15 +162,16 @@ class OpenAddressingImpl {
     if (valueNum == 0) { return 0; }
     if (values == nullptr) { return valueNum; }
     if (stencil == nullptr) { return valueNum; }
-    argStorage_.InitializeZeroAsync(stream);
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(valueNum, aivCoreNum);
+    argStorage_.InitializeZeroAsync(stream);
     aclco::InsertIf<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual, StencilT, Predicate><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)values,
       (uint8_t*)stencil,
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      valueNum,
+      batchSize,
       (uint8_t*)argStorage_.Data());
 
     uint32_t ret = aclrtSynchronizeStream(stream);
@@ -183,13 +191,14 @@ class OpenAddressingImpl {
     if (values == nullptr) { return; }
     if (stencil == nullptr) { return; }
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(valueNum, aivCoreNum);
     aclco::InsertIfAsync<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual, StencilT, Predicate><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)values,
       (uint8_t*)stencil,
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      valueNum);
+      batchSize);
   }
 
   void InsertAndFindAsync(void *values, void *outputFind, void* outputInsert, Extent valueNum, aclrtStream stream)
@@ -197,6 +206,7 @@ class OpenAddressingImpl {
     if (valueNum == 0) { return; }
     if (values == nullptr) { return; }
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(valueNum, aivCoreNum);
     aclco::InsertAndFindAsync<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)values,
@@ -204,22 +214,23 @@ class OpenAddressingImpl {
       (uint8_t*)outputInsert,      
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      valueNum);
+      batchSize);
   }
 
   SizeType Erase(void *keys, Extent keyNum, aclrtStream stream)
   {
     if (keyNum == 0) { return 0; }
     if (keys == nullptr) { return keyNum; }
-    argStorage_.InitializeZeroAsync(stream);
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(keyNum, aivCoreNum);
+    argStorage_.InitializeZeroAsync(stream);
     aclco::Erase<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)keys,
       (uint8_t*)emptyValueStorage_.Data(),
       (uint8_t*)erasedValueStorage_.Data(),
       storage_.Capacity(),
-      keyNum,
+      batchSize,
       (uint8_t*)argStorage_.Data());
 
     uint32_t ret = aclrtSynchronizeStream(stream); 
@@ -237,13 +248,14 @@ class OpenAddressingImpl {
     if (keyNum == 0) { return; }
     if (keys == nullptr) { return; }
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(keyNum, aivCoreNum);
     aclco::EraseAsync<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)keys,
       (uint8_t*)emptyValueStorage_.Data(),
       (uint8_t*)erasedValueStorage_.Data(),
       storage_.Capacity(),
-      keyNum);
+      batchSize);
   }
 
   template <typename StencilT, typename Predicate>
@@ -254,6 +266,7 @@ class OpenAddressingImpl {
     if (stencil == nullptr) { return; }
     if (outputValues == nullptr) { return; }
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(keyNum, aivCoreNum);
     aclco::FindIf<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual, StencilT, Predicate><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)keys,
@@ -261,7 +274,7 @@ class OpenAddressingImpl {
       (uint8_t*)outputValues,
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      keyNum);
+      batchSize);
   }
 
   void FindAsync(void *keys, void *outputValues, Extent keyNum, aclrtStream stream)
@@ -277,6 +290,7 @@ class OpenAddressingImpl {
     if (stencil == nullptr) { return; }
     if (outputValues == nullptr) { return; }
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(keyNum, aivCoreNum);
     aclco::ContainsIf<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual, StencilT, Predicate><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)keys,
@@ -284,7 +298,7 @@ class OpenAddressingImpl {
       (uint8_t*)outputValues,
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      keyNum);
+      batchSize);
   }
 
   void ContainsAsync(void *keys, void *outputValues, Extent keyNum, aclrtStream stream)
@@ -298,12 +312,13 @@ class OpenAddressingImpl {
     if (keyNum == 0) { return; }
     if (keys == nullptr) { return; }
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    auto batchSize = CheckedBatchSize(keyNum, aivCoreNum);
     aclco::ForEach<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual, CallbackOp><<<aivCoreNum, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)keys,
       (uint8_t*)emptyValueStorage_.Data(),
       storage_.Capacity(),
-      keyNum,
+      batchSize,
       (uint8_t*)callbackArgs);
   }
 
@@ -404,16 +419,18 @@ class OpenAddressingImpl {
 
   SizeType Count(void *keys, Extent keyNum, aclrtStream stream)
   {
-    auto count = static_cast<uint32_t>(static_cast<SizeType>(keyNum));
-    if (count == 0 || keys == nullptr) {
+    const auto requested = static_cast<uint64_t>(static_cast<SizeType>(keyNum));
+    if (requested == 0 || keys == nullptr) {
       return 0;
     }
+
+    const auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
+    const auto neededBlocks = 1U + (requested - 1U) / COUNT_THREAD_NUM;
+    const auto blocks = static_cast<uint32_t>(neededBlocks < aivCoreNum ? neededBlocks : aivCoreNum);
+    const auto count = CheckedBatchSize(keyNum, blocks, COUNT_THREAD_NUM);
     if (count > COUNT_WARP_SIZE) {
       argStorage_.InitializeZeroAsync(stream);
     }
-    auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
-    auto neededBlocks = 1U + (count - 1U) / COUNT_THREAD_NUM;
-    auto blocks = neededBlocks < aivCoreNum ? neededBlocks : aivCoreNum;
     aclco::Count<KeyType, ValueType, bucketSize, ProbingScheme, KeyEqual><<<blocks, 0, stream>>>(
       (uint8_t*)storage_.Data(),
       (uint8_t*)keys,
@@ -470,6 +487,20 @@ class OpenAddressingImpl {
   [[nodiscard]] constexpr Hasher HashFunction() const noexcept
   {
     return this->GetProbingScheme().HashFunction();
+  }
+
+ private:
+  static uint32_t CheckedBatchSize(Extent extent, uint32_t blockCount,
+                                   uint32_t threadsPerBlock = std::max(DEFAULT_THREAD_NUM, THREAD_NUM_LAUNCH_BOUND))
+  {
+    const auto count = static_cast<uint64_t>(static_cast<SizeType>(extent));
+    const auto stride = static_cast<uint64_t>(blockCount) * threadsPerBlock;
+    // The final grid-stride increment must also fit in the 32-bit loop index.
+    const auto maxBatchSize = static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 1 - stride;
+    if (count > maxBatchSize) {
+      throw std::length_error("OpenAddressing: batch size exceeds the kernel index range");
+    }
+    return static_cast<uint32_t>(count);
   }
 
  protected:
