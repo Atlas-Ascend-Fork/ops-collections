@@ -10,7 +10,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <acl/acl.h>
+#include <atomic>
 #include <cstdint>
+#include <memory>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 
@@ -31,6 +34,77 @@ void RequireArgStorageRoundTrip(T value)
   REQUIRE(storage.LoadToHost() == value);
   REQUIRE(storage.Capacity() == sizeof(T));
 }
+
+struct AllocStats {
+  std::atomic<int> allocs{0};
+  std::atomic<int> frees{0};
+  std::atomic<int> identityMismatch{0};
+  std::atomic<std::uint64_t> ownerId{0};
+};
+
+template <typename T>
+class TrackingAllocator {
+ public:
+  using ValueType = T;
+  using value_type = T;
+
+  explicit TrackingAllocator(std::uint64_t id = 0, std::shared_ptr<AllocStats> stats = std::make_shared<AllocStats>())
+    : id_{id}, stats_{std::move(stats)}
+  {
+  }
+
+  template <class U>
+  TrackingAllocator(TrackingAllocator<U> const& other) noexcept
+    : id_{other.id_}, stats_{other.stats_}
+  {
+  }
+
+  ValueType* Allocate(std::size_t n)
+  {
+    void* memory = nullptr;
+    if (aclrtMalloc(&memory, sizeof(ValueType) * n, ACL_MEM_MALLOC_HUGE_FIRST) != ACL_SUCCESS) {
+      return nullptr;
+    }
+    stats_->ownerId.store(id_);
+    stats_->allocs.fetch_add(1);
+    return static_cast<ValueType*>(memory);
+  }
+
+  void Deallocate(ValueType* p)
+  {
+    if (p == nullptr) {
+      return;
+    }
+    if (id_ != stats_->ownerId.load()) {
+      stats_->identityMismatch.fetch_add(1);
+    }
+    (void)aclrtFree(p);
+    stats_->frees.fetch_add(1);
+  }
+
+  std::uint64_t id_;
+  std::shared_ptr<AllocStats> stats_;
+};
+
+template <typename T>
+class ThrowingCopyAllocator {
+ public:
+  using ValueType = T;
+  using value_type = T;
+
+  ThrowingCopyAllocator() = default;
+  ThrowingCopyAllocator(ThrowingCopyAllocator const&)
+  {
+    throw std::runtime_error("allocator copy failed");
+  }
+  ThrowingCopyAllocator& operator=(ThrowingCopyAllocator const&) = delete;
+
+  ValueType* Allocate(std::size_t)
+  {
+    return nullptr;
+  }
+  void Deallocate(ValueType*) {}
+};
 } // namespace
 
 TEST_CASE("ArgStorage LoadToHost preserves the value type and size", "[storage][arg_storage]")
@@ -52,6 +126,122 @@ TEST_CASE("ArgStorage LoadToHost preserves the value type and size", "[storage][
   SECTION("uint16 value is narrower than a uint64 extent") {
     RequireArgStorageRoundTrip<std::uint16_t, std::uint64_t>(0xabcdu);
   }
+}
+
+TEST_CASE("ArgStorage move construction detaches from the destroyed source allocator", "[storage][move][issue93]")
+{
+  aclco::test::AclGlobalGuard aclGlobal{};
+
+  auto stats = std::make_shared<AllocStats>();
+  constexpr std::uint32_t value = 123U;
+  using Storage = aclco::ArgStorage<std::uint32_t, std::uint32_t, TrackingAllocator<std::uint32_t>>;
+
+  auto makeMoved = [](TrackingAllocator<std::uint32_t>& alloc) {
+    Storage source{alloc};
+    source.Initialize(value);
+    return source;
+  };
+
+  TrackingAllocator<std::uint32_t> alloc{7U, stats};
+  {
+    Storage dest = makeMoved(alloc);
+    REQUIRE(dest.LoadToHost() == value);
+    REQUIRE(stats->frees.load() == 0);
+  }
+  REQUIRE(stats->allocs.load() == 1);
+  REQUIRE(stats->frees.load() == 1);
+  REQUIRE(stats->identityMismatch.load() == 0);
+}
+
+TEST_CASE("ArgStorage chained move keeps exactly one deallocation", "[storage][move][issue93]")
+{
+  aclco::test::AclGlobalGuard aclGlobal{};
+
+  auto stats = std::make_shared<AllocStats>();
+  constexpr std::uint32_t value = 0xfeedbeefU;
+  using Storage = aclco::ArgStorage<std::uint32_t, std::uint32_t, TrackingAllocator<std::uint32_t>>;
+
+  auto makeChained = [](TrackingAllocator<std::uint32_t>& alloc) {
+    Storage first{alloc};
+    first.Initialize(value);
+    Storage second{std::move(first)};
+    return second;
+  };
+
+  TrackingAllocator<std::uint32_t> alloc{11U, stats};
+  {
+    Storage third = makeChained(alloc);
+    REQUIRE(third.LoadToHost() == value);
+    REQUIRE(stats->frees.load() == 0);
+  }
+  REQUIRE(stats->allocs.load() == 1);
+  REQUIRE(stats->frees.load() == 1);
+  REQUIRE(stats->identityMismatch.load() == 0);
+}
+
+TEST_CASE("ArgStorage move assignment frees the previous slot once", "[storage][move][issue93]")
+{
+  aclco::test::AclGlobalGuard aclGlobal{};
+
+  auto stats = std::make_shared<AllocStats>();
+  {
+    TrackingAllocator<std::uint32_t> alloc{13U, stats};
+    using Storage = aclco::ArgStorage<std::uint32_t, std::uint32_t, TrackingAllocator<std::uint32_t>>;
+    Storage dest{alloc};
+    dest.Initialize(1U);
+
+    Storage source{alloc};
+    source.Initialize(2U);
+    dest = std::move(source);
+    REQUIRE(dest.LoadToHost() == 2U);
+  }
+  REQUIRE(stats->allocs.load() == 2);
+  REQUIRE(stats->frees.load() == 2);
+  REQUIRE(stats->identityMismatch.load() == 0);
+}
+
+TEST_CASE("ArgStorage move construction works with the default allocator", "[storage][move][issue93]")
+{
+  aclco::test::AclGlobalGuard aclGlobal{};
+
+  aclco::ArgStorage<std::uint32_t> source;
+  source.Initialize(0x12345678U);
+  aclco::ArgStorage<std::uint32_t> dest{std::move(source)};
+  REQUIRE(dest.LoadToHost() == 0x12345678U);
+}
+
+TEST_CASE("BucketStorage move construction detaches from the destroyed source allocator", "[storage][move][issue93]")
+{
+  aclco::test::AclGlobalGuard aclGlobal{};
+  aclco::test::AclStreamGuard streamGuard{};
+
+  using ValueType = aclco::Pair<std::uint32_t, std::uint32_t>;
+  using Storage = aclco::BucketStorage<ValueType, 5, std::uint32_t, TrackingAllocator<ValueType>>;
+  auto stats = std::make_shared<AllocStats>();
+
+  auto makeMoved = [](TrackingAllocator<ValueType>& alloc) {
+    Storage source{20, alloc};
+    return source;
+  };
+
+  TrackingAllocator<ValueType> alloc{17U, stats};
+  {
+    Storage dest = makeMoved(alloc);
+    REQUIRE(dest.Capacity() == 20);
+    REQUIRE(stats->frees.load() == 0);
+  }
+  REQUIRE(stats->allocs.load() == 1);
+  REQUIRE(stats->frees.load() == 1);
+  REQUIRE(stats->identityMismatch.load() == 0);
+}
+
+TEST_CASE("ArgStorage constructor propagates allocator copy failures", "[storage][exception][issue93]")
+{
+  aclco::test::AclGlobalGuard aclGlobal{};
+
+  ThrowingCopyAllocator<std::uint32_t> alloc;
+  REQUIRE_THROWS_AS((aclco::ArgStorage<std::uint32_t, std::uint32_t, ThrowingCopyAllocator<std::uint32_t>>{alloc}),
+                    std::runtime_error);
 }
 
 TEST_CASE("BucketStorage Initialize sets all values and capacity", "[storage]")

@@ -37,9 +37,9 @@ class ArgStorage {
   explicit constexpr ArgStorage(Allocator const& allocator = {})
   : allocator_(allocator),
     capacity_(sizeof(ValueType)),
-    slots_{allocator_.Allocate(defaultArgsStorageSize),
-           SlotDeleterType{allocator_}}
+    slots_{nullptr, SlotDeleterType{allocator_}}
   {
+    slots_.reset(allocator_.Allocate(defaultArgsStorageSize));
   }
 
   ArgStorage(ArgStorage&&) = default;

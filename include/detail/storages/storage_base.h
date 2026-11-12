@@ -16,13 +16,13 @@ template <typename Allocator>
 struct CustomDeleter {
   using Pointer = typename Allocator::ValueType*;  ///< Value pointer type
 
-  explicit constexpr CustomDeleter(Allocator& allocator)
+  explicit constexpr CustomDeleter(Allocator const& allocator)
     : allocator_{allocator}
   {
   }
 
   void operator()(Pointer ptr) { allocator_.Deallocate(ptr); }
 
-  Allocator& allocator_;     ///< Allocator used deallocating values
+  Allocator allocator_;
 };
 }

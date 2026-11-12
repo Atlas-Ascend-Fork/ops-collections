@@ -26,9 +26,9 @@ constexpr BucketStorage<T, BucketSize, Extent, Allocator>::BucketStorage(
   Extent capacity, Allocator const& allocator)
   : extent_{capacity},
   allocator_{allocator},
-  slots_{allocator_.Allocate(this->Capacity()),
-         SlotDeleterType{allocator_}}
+  slots_{nullptr, SlotDeleterType{allocator_}}
 {
+  slots_.reset(allocator_.Allocate(this->Capacity()));
   if (static_cast<std::size_t>(this->Capacity()) != 0 && !slots_) {
     throw std::bad_alloc{};
   }
