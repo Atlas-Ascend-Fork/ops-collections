@@ -314,24 +314,67 @@ COLLECTION_SIMT_DEVICE void WriteMatches(StaticMultimapRef<Key, Value> const& re
                                          uint64_t begin, uint64_t count, __gm__ Key* outputKeys,
                                          __gm__ Value* outputValues)
 {
-    // Count observed the same immutable table; start at its first match
-    // and stop after writing the known number of pairs.
+    // Count observed the same immutable table; stop after writing the known
+    // number of pairs. Dense mode replays the canonical probe sequence from
+    // the start slot; direct slots keep the contiguous walk from first match.
     auto out = begin;
-    for (std::size_t step = 0; step < ref.capacity; ++step) {
-        auto pair = ref.PairAt(slot);
-        Key current = pair.first;
-        if (current == ref.emptyKey) {
-            break;
-        }
-        if (current == key) {
-            outputKeys[out] = key;
-            outputValues[out++] = pair.second;
-            if (out == begin + count) {
+    auto target = begin + count;
+    if (ref.indices != nullptr) {
+        uint32_t start = uint32_t(ref.Start(key));
+        uint32_t limit = uint32_t(ref.capacity);
+        uint32_t cur = start;
+        uint32_t i = 0;
+        uint32_t step = 0;
+        while (i < limit && out < target) {
+            auto pair = ref.PairAt(cur);
+            if (pair.first == ref.emptyKey) {
                 break;
             }
+            if (pair.first == key) {
+                outputKeys[out] = key;
+                outputValues[out] = pair.second;
+                ++out;
+            }
+            ++i;
+            if (i < StaticMultimapRef<Key, Value>::PROBE_WINDOW) {
+                if (++cur == limit) {
+                    cur = 0;
+                }
+            } else {
+                if (i == StaticMultimapRef<Key, Value>::PROBE_WINDOW) {
+                    if (limit <= StaticMultimapRef<Key, Value>::PROBE_WINDOW) {
+                        break; // The window already covers the whole table.
+                    }
+                    step = ref.ProbeStep(key, limit);
+                }
+                // Window landings were already visited during the window phase;
+                // advance past them without spending visit budget so the replay
+                // matches the insert and query sequences exactly.
+                uint64_t offset = 0;
+                do {
+                    cur += step;
+                    if (cur >= limit) {
+                        cur -= limit;
+                    }
+                    offset = (cur >= start) ? uint64_t(cur) - start : uint64_t(cur) + limit - start;
+                } while (offset < StaticMultimapRef<Key, Value>::PROBE_WINDOW);
+            }
         }
-        if (++slot == ref.capacity) {
-            slot = 0;
+    } else {
+        for (std::size_t step = 0; step < ref.capacity && out < target; ++step) {
+            auto pair = ref.PairAt(slot);
+            Key current = pair.first;
+            if (current == ref.emptyKey) {
+                break;
+            }
+            if (current == key) {
+                outputKeys[out] = key;
+                outputValues[out] = pair.second;
+                ++out;
+            }
+            if (++slot == ref.capacity) {
+                slot = 0;
+            }
         }
     }
     // Each query owns a disjoint segment. Heapsort provides deterministic

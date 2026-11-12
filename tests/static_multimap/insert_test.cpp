@@ -86,3 +86,42 @@ TEMPLATE_TEST_CASE_SIG("static_multimap insert capacity boundary", "[static_mult
     REQUIRE_THROWS_AS(map.Insert(nullptr, aclco::Extent<std::size_t>(1u), stream), std::invalid_argument);
     REQUIRE(map.Size(stream) == capacity);
 }
+
+TEMPLATE_TEST_CASE_SIG("static_multimap insert saturates with one duplicate key", "[static_multimap][insert][boundary]",
+                       ((typename Key, typename Value, int Dummy), Key, Value, Dummy), (int32_t, int32_t, 0),
+                       (int64_t, int64_t, 0))
+{
+    aclco::test::AclGlobalGuard g_acl;
+    aclco::test::AclStreamGuard sg;
+    auto stream = sg.stream;
+    // Small dense tables force the stride phase: the 32-slot window of one key
+    // saturates long before the table does, so the probe walk must still reach
+    // every remaining slot as the load approaches capacity.
+    constexpr std::size_t requested = 300u;
+    auto map = MakeMultimap<Key, Value>(requested, stream);
+    auto capacity = map.Capacity();
+    std::vector<aclco::Pair<Key, Value>> pairs(capacity, {static_cast<Key>(1), static_cast<Value>(1025)});
+    aclco::test::DeviceBuffer<aclco::Pair<Key, Value>> d_pairs(pairs.size());
+    d_pairs.CopyFromHostAsync(pairs.data(), pairs.size(), stream);
+
+    SECTION("capacity-1 duplicates leave room for exactly one more")
+    {
+        auto failures = map.Insert(d_pairs.Data(), aclco::Extent<std::size_t>(capacity - 1u), stream);
+        REQUIRE(failures == 0u);
+        REQUIRE(map.Size(stream) == capacity - 1u);
+        failures = map.Insert(d_pairs.Data(), aclco::Extent<std::size_t>(1u), stream);
+        REQUIRE(failures == 0u);
+        REQUIRE(map.Size(stream) == capacity);
+    }
+    SECTION("the full table accepts capacity identical pairs")
+    {
+        auto failures = map.Insert(d_pairs.Data(), aclco::Extent<std::size_t>(capacity), stream);
+        REQUIRE(failures == 0u);
+        REQUIRE(map.Size(stream) == capacity);
+    }
+
+    Key probe = static_cast<Key>(1);
+    aclco::test::DeviceBuffer<Key> d_probe(1);
+    d_probe.CopyFromHostAsync(&probe, 1, stream);
+    REQUIRE(map.Count(d_probe.Data(), aclco::Extent<std::size_t>(1u), stream) == capacity);
+}

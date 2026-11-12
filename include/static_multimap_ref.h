@@ -16,7 +16,7 @@
 namespace aclco {
 
 /**
- * @brief Device-side linear-probing view. Queries must not overlap insertion.
+ * @brief Device-side probing view: a contiguous window first, then a per-key stride.
  * Each successful insertion owns a different slot, including identical pairs.
  * Dense storage uses one tagged-index CAS; inserting threads only inspect the
  * index table, never another thread's unpublished dense payload. Direct slots
@@ -24,6 +24,7 @@ namespace aclco {
  */
 template <class Key, class Value>
 struct StaticMultimapRef {
+    static constexpr uint32_t PROBE_WINDOW = 32; ///< Contiguous slots visited before stride probing takes over.
     __gm__ Pair<Key, Value>* slots; ///< Dense payloads or direct pairs, depending on indices.
     std::size_t capacity;
     Key emptyKey;     ///< Reserved key that identifies an empty direct slot.
@@ -68,27 +69,43 @@ struct StaticMultimapRef {
      */
     COLLECTION_SIMT_DEVICE bool InsertIndex(Key key, std::size_t index) const
     {
-        auto slot = uint32_t(Start(key));
-        auto limit = uint32_t(capacity);
+        uint32_t start = uint32_t(Start(key));
+        uint32_t limit = uint32_t(capacity);
         auto entry = (uint64_t(Tag(key)) << 32) | uint32_t(index + 1);
-        uint32_t step = 0;
-        // Compact nonnegative integer domains have distinct first slots. The
-        // fallback hash preloads slots to avoid failed atomic writes.
-        if (InCapacityRange(key)) {
-            if (AscendC::Simt::AtomicCas(indices + slot, uint64_t(0), entry) == 0) {
-                return true;
-            }
-            if (++slot == limit) {
-                slot = 0;
-            }
-            step = 1;
+        // Preload the first slot to avoid a failed atomic write inside the probe loop.
+        if (indices[start] == 0 && AscendC::Simt::AtomicCas(indices + start, uint64_t(0), entry) == 0) {
+            return true;
         }
-        for (; step < limit; ++step) {
+        uint32_t slot = start;
+        uint32_t i = 0;
+        uint32_t step = 0;
+        while (i < limit) {
             if (indices[slot] == 0 && AscendC::Simt::AtomicCas(indices + slot, uint64_t(0), entry) == 0) {
                 return true;
             }
-            if (++slot == limit) {
-                slot = 0;
+            ++i;
+            if (i < PROBE_WINDOW) {
+                if (++slot == limit) {
+                    slot = 0;
+                }
+            } else {
+                if (i == PROBE_WINDOW) {
+                    if (limit <= PROBE_WINDOW) {
+                        break; // The window already covers the whole table.
+                    }
+                    step = ProbeStep(key, limit);
+                }
+                // Window landings were already visited during the window phase;
+                // advance past them without spending visit budget so the stride
+                // cycle still reaches every slot outside the window.
+                uint64_t offset = 0;
+                do {
+                    slot += step;
+                    if (slot >= limit) {
+                        slot -= limit;
+                    }
+                    offset = (slot >= start) ? uint64_t(slot) - start : uint64_t(slot) + limit - start;
+                } while (offset < PROBE_WINDOW);
             }
         }
         return false;
@@ -165,6 +182,65 @@ struct StaticMultimapRef {
     }
 
     /**
+     * @brief Compute an odd probe stride coprime with the capacity.
+     * @return A stride in [1, capacity).
+     * @note Only reached after the contiguous window overflows, so queries and
+     * inserts of low-duplicate keys never pay for it.
+     */
+    COLLECTION_SIMT_DEVICE uint32_t ProbeStep(Key key, uint32_t limit) const
+    {
+        uint32_t hash;
+        if constexpr (sizeof(Key) == 4) {
+            hash = murmurhash3_fmix32<Key>{}(key);
+        } else {
+            hash = uint32_t(murmurhash3_fmix64<Key>{}(key));
+        }
+        // Multiplicative reduction, no integer division on the device hot path.
+        uint32_t step = uint32_t((uint64_t(hash) * limit) >> 32);
+        if (step == 0) {
+            step = 1;
+        }
+        while (GcdU32(step, limit) != 1) {
+            if (++step == limit) {
+                step = 1;
+            }
+        }
+        return step;
+    }
+
+    // Binary GCD: shifts and subtractions only, no division.
+    COLLECTION_SIMT_DEVICE static uint32_t GcdU32(uint32_t x, uint32_t y)
+    {
+        if (x == 0) {
+            return y;
+        }
+        if (y == 0) {
+            return x;
+        }
+        uint32_t shift = 0;
+        while (((x | y) & 1u) == 0) {
+            x >>= 1;
+            y >>= 1;
+            ++shift;
+        }
+        while ((x & 1u) == 0) {
+            x >>= 1;
+        }
+        do {
+            while ((y & 1u) == 0) {
+                y >>= 1;
+            }
+            if (x > y) {
+                uint32_t t = x;
+                x = y;
+                y = t;
+            }
+            y -= x;
+        } while (y != 0);
+        return x << shift;
+    }
+
+    /**
      * @brief Insert one pair into direct slots.
      * @return Whether an empty slot was claimed.
      * @note Requires indices == nullptr and no concurrent queries.
@@ -232,32 +308,83 @@ struct StaticMultimapRef {
         if (key == emptyKey) {
             return result;
         }
-        using Index = std::conditional_t<Indexed, uint32_t, std::size_t>;
-        auto slot = Index(Start(key));
-        auto limit = Index(capacity);
-        for (Index step = 0; step < limit; ++step) {
-            auto entry = Indexed ? indices[slot] : 0;
-            if (Indexed ? entry == 0 : slots[slot].first == emptyKey) {
-                break;
-            }
-            if (Indexed ? Matches(entry, key) : slots[slot].first == key) {
-                if constexpr (Mode == QueryMode::Contains) {
-                    return true;
-                } else if constexpr (Mode == QueryMode::Find) {
-                    Value value = Indexed ? slots[uint32_t(entry) - 1].second : slots[slot].second;
-                    if (!found || value < result) {
-                        result = value;
-                        found = true;
+        if constexpr (Indexed) {
+            uint32_t start = uint32_t(Start(key));
+            uint32_t limit = uint32_t(capacity);
+            uint32_t slot = start;
+            uint32_t i = 0;
+            uint32_t step = 0;
+            while (i < limit) {
+                auto entry = indices[slot];
+                if (entry == 0) {
+                    break;
+                }
+                if (Matches(entry, key)) {
+                    if constexpr (Mode == QueryMode::Contains) {
+                        return true;
+                    } else if constexpr (Mode == QueryMode::Find) {
+                        Value value = slots[uint32_t(entry) - 1].second;
+                        if (!found || value < result) {
+                            result = value;
+                            found = true;
+                        }
+                    } else {
+                        if (first && result == 0) {
+                            *first = slot;
+                        }
+                        ++result;
+                    }
+                }
+                ++i;
+                if (i < PROBE_WINDOW) {
+                    if (++slot == limit) {
+                        slot = 0;
                     }
                 } else {
-                    if (first && result == 0) {
-                        *first = slot;
+                    if (i == PROBE_WINDOW) {
+                        if (limit <= PROBE_WINDOW) {
+                            break; // The window already covers the whole table.
+                        }
+                        step = ProbeStep(key, limit);
                     }
-                    ++result;
+                    // Window landings were already visited during the window
+                    // phase; advance past them without spending visit budget so
+                    // the stride cycle still reaches every slot outside it.
+                    uint64_t offset = 0;
+                    do {
+                        slot += step;
+                        if (slot >= limit) {
+                            slot -= limit;
+                        }
+                        offset = (slot >= start) ? uint64_t(slot) - start : uint64_t(slot) + limit - start;
+                    } while (offset < PROBE_WINDOW);
                 }
             }
-            if (++slot == limit) {
-                slot = 0;
+        } else {
+            std::size_t slot = std::size_t(Start(key));
+            for (std::size_t step = 0; step < capacity; ++step) {
+                if (slots[slot].first == emptyKey) {
+                    break;
+                }
+                if (slots[slot].first == key) {
+                    if constexpr (Mode == QueryMode::Contains) {
+                        return true;
+                    } else if constexpr (Mode == QueryMode::Find) {
+                        Value value = slots[slot].second;
+                        if (!found || value < result) {
+                            result = value;
+                            found = true;
+                        }
+                    } else {
+                        if (first && result == 0) {
+                            *first = slot;
+                        }
+                        ++result;
+                    }
+                }
+                if (++slot == capacity) {
+                    slot = 0;
+                }
             }
         }
         return result;
@@ -293,20 +420,60 @@ struct StaticMultimapRef {
     {
         uint64_t count = 0;
         if (key == emptyKey) return count;
-        using Index = std::conditional_t<Indexed, uint32_t, std::size_t>;
-        auto slot = Index(Start(key));
-        auto limit = Index(capacity);
-        for (Index step = 0; step < limit; ++step) {
-            auto entry = Indexed ? indices[slot] : 0;
-            if (Indexed ? entry == 0 : slots[slot].first == emptyKey) break;
-            if (Indexed ? Matches(entry, key) : slots[slot].first == key) {
-                if (first && count == 0) *first = slot;
-                if (sink.Accept(count)) {
-                    sink.Store(count, Indexed ? slots[uint32_t(entry) - 1].second : slots[slot].second);
+        if constexpr (Indexed) {
+            uint32_t start = uint32_t(Start(key));
+            uint32_t limit = uint32_t(capacity);
+            uint32_t slot = start;
+            uint32_t i = 0;
+            uint32_t step = 0;
+            while (i < limit) {
+                auto entry = indices[slot];
+                if (entry == 0) break;
+                if (Matches(entry, key)) {
+                    if (first && count == 0) *first = slot;
+                    if (sink.Accept(count)) {
+                        sink.Store(count, slots[uint32_t(entry) - 1].second);
+                    }
+                    ++count;
                 }
-                ++count;
+                ++i;
+                if (i < PROBE_WINDOW) {
+                    if (++slot == limit) {
+                        slot = 0;
+                    }
+                } else {
+                    if (i == PROBE_WINDOW) {
+                        if (limit <= PROBE_WINDOW) {
+                            break; // The window already covers the whole table.
+                        }
+                        step = ProbeStep(key, limit);
+                    }
+                    // Window landings were already visited during the window
+                    // phase; advance past them without spending visit budget so
+                    // the stride cycle still reaches every slot outside it.
+                    uint64_t offset = 0;
+                    do {
+                        slot += step;
+                        if (slot >= limit) {
+                            slot -= limit;
+                        }
+                        offset = (slot >= start) ? uint64_t(slot) - start : uint64_t(slot) + limit - start;
+                    } while (offset < PROBE_WINDOW);
+                }
             }
-            if (++slot == limit) slot = 0;
+        } else {
+            std::size_t slot = std::size_t(Start(key));
+            for (std::size_t step = 0; step < capacity; ++step) {
+                if (slots[slot].first == emptyKey) break;
+                if (slots[slot].first == key) {
+                    if (first && count == 0) *first = slot;
+                    if (sink.Accept(count)) {
+                        sink.Store(count, slots[slot].second);
+                    }
+                    ++count;
+                }
+                if (++slot == capacity) slot = 0;
+            }
         }
         return count;
     }
