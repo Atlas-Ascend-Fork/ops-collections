@@ -9,6 +9,8 @@
  */
 #pragma once
 
+#include <type_traits>
+
 #include "macros.h"
 
 namespace aclco {
@@ -16,12 +18,14 @@ static constexpr std::size_t dynamicExtent = static_cast<std::size_t>(-1);
 
 /**
  * @brief 静态 Extent 类
- * 
+ *
  * @tparam SizeType 容器值的数据类型
  * @tparam N 容量大小
  */
 template <typename SizeType, std::size_t N = dynamicExtent>
 struct Extent {
+  static_assert(std::is_integral_v<SizeType> && std::is_unsigned_v<SizeType>,
+                "SizeType must be an unsigned integral type");
   using ValueType = SizeType;
   constexpr Extent() = default;
 
@@ -49,6 +53,8 @@ struct Extent {
    */
 template <typename SizeType>
 struct Extent<SizeType, dynamicExtent> {
+  static_assert(std::is_integral_v<SizeType> && std::is_unsigned_v<SizeType>,
+                "SizeType must be an unsigned integral type");
   using ValueType = SizeType;
 
     /**

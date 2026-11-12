@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include <acl/acl.h>
 
@@ -22,6 +23,8 @@ template<typename T,
          typename Extent = uint32_t>
 class BucketStorageRef {
 public:
+    static_assert(std::is_integral_v<Extent> && std::is_unsigned_v<Extent>,
+                  "SizeType must be an unsigned integral type to keep probe indexes valid");
     static constexpr uint32_t bucketSize = BucketSize; ///< Number of elements processed per bucket
     using SizeType = Extent; ///< Storage size type
     using ValueType = T; ///< Slot type

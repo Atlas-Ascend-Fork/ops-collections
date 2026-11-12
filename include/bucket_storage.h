@@ -10,7 +10,7 @@
 #pragma once
 
 #include <acl/acl.h>
-
+#include <type_traits>
 #include "detail/storages/storage_base.h"
 #include "extent.h"
 #include "utility/allocator.h"
@@ -25,17 +25,19 @@ namespace aclco {
    * 
    * @tparam T 存储的元素类型
    * @tparam BucketSize 每个桶中包含的元素个数
-   * @tparam Extent 容器类型，默认为 Extent<size_t>
+   * @tparam Extent 容量大小类型，默认为 std::size_t
    * @tparam Allocator 内存分配器类型，默认为 DefaultAllocator<T>
-   * 
+   *
    * @warning 根据 static_map 中的静态断言检查以及 Pair 结构的限制，元素类型 T 的大小不能超过8字节
    */
 template <typename T,
           int32_t BucketSize,
-          typename Extent = Extent<size_t>,
+          typename Extent = std::size_t,
           typename Allocator = DefaultAllocator<T>> //unfinish...
 class BucketStorage {
  public:
+  static_assert(std::is_integral_v<Extent> && std::is_unsigned_v<Extent>,
+                "SizeType must be an unsigned integral type to keep probe indexes valid");
   static constexpr uint32_t bucketSize = BucketSize; ///< Number of elements processed per bucket
 
   using ExtentType = Extent;

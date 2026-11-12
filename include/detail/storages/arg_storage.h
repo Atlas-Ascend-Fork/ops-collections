@@ -11,6 +11,8 @@
 
 #include <acl/acl.h>
 
+#include <type_traits>
+
 #include "detail/storages/storage_base.h"
 #include "utility/allocator.h"
 #include "utility/kernel_launch_utils.h"
@@ -25,6 +27,8 @@ template <typename T,
           typename Allocator = DefaultAllocator<T>>
 class ArgStorage {
  public:
+  static_assert(std::is_integral_v<Extent> && std::is_unsigned_v<Extent>,
+                "SizeType must be an unsigned integral type to keep probe indexes valid");
   using SizeType = Extent;
   using ValueType = T;
   using AllocatorType = typename std::allocator_traits<Allocator>::template rebind_alloc<ValueType>;

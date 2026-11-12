@@ -19,11 +19,9 @@ namespace aclco {
 template <typename SizeType, typename HashType>
 COLLECTION_HOST_DEVICE constexpr SizeType ToPositive(HashType hash)
 {
-    if constexpr (std::is_signed_v<SizeType>) {
-        return std::abs(static_cast<SizeType>(hash));
-    } else {
-        return static_cast<SizeType>(hash);
-    }
+    static_assert(std::is_integral_v<SizeType> && std::is_unsigned_v<SizeType>,
+                  "SizeType must be an unsigned integral type to keep probe indexes valid");
+    return static_cast<SizeType>(hash);
 }
 
 template <typename SizeType, typename HashType>

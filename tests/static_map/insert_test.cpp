@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 #include "tests/common/acl_env.h"
 #include "tests/common/device_buffer.h"
@@ -24,6 +25,7 @@
 #include "tests/common/matchers.h"
 #include "tests/common/test_print.h"
 #include "hash_functions.h"
+#include "utility/math_utils.h"
 namespace
 {
 template <typename K, typename V>
@@ -270,4 +272,50 @@ TEST_CASE("StaticMap Insert counts a reserved empty key as failed", "[static_map
   keys.CopyFromHostAsync(query, 2, stream);
   CHECK(map.Count(keys.Data(), Extent{1}, stream) == 0);
   CHECK(map.Count(keys.Data(), Extent{2}, stream) == 1);
+}
+
+namespace
+{
+template <typename Key>
+struct MinSignedHash {
+  using ArgumentType = Key;
+  using ResultType = int32_t;
+  COLLECTION_HOST_DEVICE constexpr ResultType operator()(Key const&) const noexcept
+  {
+    return std::numeric_limits<int32_t>::min();
+  }
+};
+} // namespace
+
+TEST_CASE("static_map keeps probe indexes valid for the minimum signed hash", "[static_map][insert][probing]")
+{
+  using Key = uint32_t;
+  using Value = uint32_t;
+  using Extent = aclco::Extent<std::size_t>;
+  STATIC_REQUIRE(aclco::SanitizeHash<uint32_t>(std::numeric_limits<int32_t>::min()) == 2147483648u);
+  STATIC_REQUIRE(std::is_same_v<typename aclco::BucketStorage<uint32_t, 5>::SizeType, std::size_t>);
+
+  aclco::test::AclGlobalGuard acl;
+  aclco::test::AclStreamGuard guard;
+  auto stream = guard.stream;
+  auto sent = aclco::test::MakeDefaultSentinels<Key, Value>();
+  auto map = aclco::test::map_factory::MakeStaticMap<Key, Value, 1, aclco::LinearProbing<MinSignedHash<Key>>>(
+    128, sent, stream);
+
+  const Pair<Key, Value> input[] = {{7, 31}, {8, 32}, {9, 33}};
+  aclco::test::DeviceBuffer<Pair<Key, Value>> dPairs(3);
+  dPairs.CopyFromHostAsync(input, 3, stream);
+  REQUIRE(map.Insert(dPairs.Data(), Extent{3}, stream) == 0);
+
+  for (auto const& p : input) {
+    aclco::test::DeviceBuffer<Key> dKey(1);
+    aclco::test::DeviceBuffer<Value> dOutput(1);
+    dKey.CopyFromHostAsync(&p.first, 1, stream);
+    CHECK(map.Count(dKey.Data(), Extent{1}, stream) == 1);
+    map.Find(dKey.Data(), dOutput.Data(), Extent{1}, stream);
+    Value found{};
+    dOutput.CopyToHostAsync(&found, 1, stream);
+    aclco::test::Sync(stream);
+    CHECK(found == p.second);
+  }
 }
