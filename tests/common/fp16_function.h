@@ -263,6 +263,8 @@ struct EqualTo<fp16_t>
     {
         return lhs == rhs;
     }
+
+    COLLECTION_HOST_DEVICE bool operator==(EqualTo const&) const noexcept { return true; }
 };
 }
 

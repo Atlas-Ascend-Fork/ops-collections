@@ -10,11 +10,21 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 
 #include "macros.h"
 #include "utility/is_same.h"
 
 namespace aclco {
+namespace detail {
+template <typename T, typename = void>
+struct IsEqualityComparable : FalseType {};
+
+template <typename T>
+struct IsEqualityComparable<T, std::void_t<decltype(std::declval<T const&>() == std::declval<T const&>())>>
+    : TrueType {};
+}  // namespace detail
 /**
  * @brief 公共线性探测方案类
  *
@@ -70,6 +80,12 @@ class LinearProbing {
    */
   COLLECTION_HOST_DEVICE constexpr Hasher HashFunction() const noexcept;
 
+  template <typename H = Hash, std::enable_if_t<detail::IsEqualityComparable<H>::value, int> = 0>
+  COLLECTION_HOST_DEVICE constexpr bool operator==(LinearProbing const& other) const noexcept
+  {
+    return hash_ == other.hash_;
+  }
+
  private:
   Hash hash_;
 };
@@ -92,6 +108,13 @@ class DoubleHashing {
                                                    Extent upperBound) const noexcept;
 
   COLLECTION_HOST_DEVICE constexpr Hasher HashFunction() const noexcept;
+
+  template <typename H1 = Hash1, typename H2 = Hash2,
+            std::enable_if_t<detail::IsEqualityComparable<H1>::value && detail::IsEqualityComparable<H2>::value, int> = 0>
+  COLLECTION_HOST_DEVICE constexpr bool operator==(DoubleHashing const& other) const noexcept
+  {
+    return hash1_ == other.hash1_ && hash2_ == other.hash2_;
+  }
 
  private:
   Hash1 hash1_;

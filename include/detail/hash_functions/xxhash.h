@@ -69,6 +69,11 @@ public:
      */
     COLLECTION_HOST_DEVICE constexpr XXHash_32(std::uint32_t seed = 0) : seed_{seed} {}
 
+    COLLECTION_HOST_DEVICE constexpr bool operator==(XXHash_32 const& other) const noexcept
+    {
+        return seed_ == other.seed_;
+    }
+
     /**
      * @brief Returns a hash value for its argument, as a value of type `ResultType`.
      *

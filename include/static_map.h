@@ -70,7 +70,9 @@ class StaticMap {
    * @param stream ACL流，默认为 nullptr
    * 
    * @note 实际容量会向上取整到BucketSize的倍数
-   * 
+   *
+   * @throws std::invalid_argument pred 或 probingScheme 携带无法在设备内核生效的实例状态时抛出
+   *
    * @warning Key和Value类型大小不能超过8字节
    */
   constexpr StaticMap(Extent capacity,

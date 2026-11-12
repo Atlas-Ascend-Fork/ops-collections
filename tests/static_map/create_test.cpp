@@ -12,8 +12,11 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
+
+#include "hash_functions.h"
 
 #include "tests/common/acl_env.h"
 #include "tests/common/device_buffer.h"
@@ -21,7 +24,24 @@
 #include "tests/common/dump_table.h"
 #include "tests/common/matchers.h"
 #include "tests/common/generators.h"
-#include "tests/common/test_print.h" 
+#include "tests/common/test_print.h"
+
+TEST_CASE("static_map rejects probing scheme with instance state", "[static_map][create]")
+{
+  aclco::test::AclGlobalGuard g_acl;
+
+  using Key = uint32_t;
+  using Value = uint32_t;
+  auto sent = aclco::test::MakeDefaultSentinels<Key, Value>();
+
+  REQUIRE_THROWS_AS(
+    (aclco::StaticMap<Key, Value>(100, sent.emptyKey, sent.emptyValue, aclco::EqualTo<Key>{},
+      aclco::LinearProbing<aclco::murmurhash3_32<Key>>{aclco::murmurhash3_32<Key>{0xDEADBEEFu}})),
+    std::invalid_argument);
+
+  auto deflt = aclco::StaticMap<Key, Value>(100, sent.emptyKey, sent.emptyValue);
+  REQUIRE(deflt.Capacity() >= 100);
+}
 
 TEMPLATE_TEST_CASE_SIG(
   "static_map Key == Value create test",

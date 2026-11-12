@@ -12,6 +12,9 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <utility>
 
 #include "bucket_storage.h"
 #include "detail/storages/arg_storage.h"
@@ -32,6 +35,19 @@ struct AlwaysTrue {
     return true;
   }
 };
+
+namespace detail {
+template <typename T>
+constexpr void ValidateDefaultInstance(T const& value, char const* name)
+{
+  if constexpr (IsEqualityComparable<T>::value) {
+    if (!(value == T{})) {
+      throw std::invalid_argument(std::string(name) +
+                                  " carries instance state that cannot take effect on device");
+    }
+  }
+}
+} // namespace detail
 
 template <class Key,
           class Value,
@@ -65,7 +81,7 @@ class OpenAddressingImpl {
                               ProbingScheme const& probingScheme,
                               aclrtStream stream,
                               bool clearOnConstruction)
-    : probingScheme_{probingScheme},
+    : probingScheme_{ValidateInputs(probingScheme, pred)},
       storage_{MakeValidExtent<ProbingScheme, Storage>(capacity), DefaultAllocator<ValueType>()},
       emptyValue_{reinterpret_cast<ValueType&>(emptyValue)},
       predicate_{pred}
@@ -508,6 +524,13 @@ class OpenAddressingImpl {
   }
 
  private:
+  static constexpr ProbingScheme const& ValidateInputs(ProbingScheme const& probingScheme, KeyEqual const& pred)
+  {
+    detail::ValidateDefaultInstance(probingScheme, "ProbingScheme");
+    detail::ValidateDefaultInstance(pred, "KeyEqual");
+    return probingScheme;
+  }
+
   static uint32_t CheckedBatchSize(Extent extent, uint32_t blockCount,
                                    uint32_t threadsPerBlock = std::max(DEFAULT_THREAD_NUM, THREAD_NUM_LAUNCH_BOUND))
   {

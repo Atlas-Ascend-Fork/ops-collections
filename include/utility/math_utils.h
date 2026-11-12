@@ -68,6 +68,7 @@ COLLECTION_HOST_DEVICE constexpr std::size_t BitCeil(std::size_t n)
 template <typename T>
 struct EqualTo {
     COLLECTION_HOST_DEVICE constexpr bool operator()(T const& lhs, T const& rhs) const noexcept { return lhs == rhs; }
+    COLLECTION_HOST_DEVICE constexpr bool operator==(EqualTo const&) const noexcept { return true; }
 };
 
 template <class Iterator, class Value>

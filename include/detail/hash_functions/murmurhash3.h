@@ -23,6 +23,10 @@ struct MurmurHash3Fmix32 {
     using ResultType   = std::uint32_t;
 
     COLLECTION_HOST_DEVICE constexpr MurmurHash3Fmix32(std::uint32_t seed = 0) : seed_{seed} {}
+    COLLECTION_HOST_DEVICE constexpr bool operator==(MurmurHash3Fmix32 const& other) const noexcept
+    {
+        return seed_ == other.seed_;
+    }
     COLLECTION_HOST_DEVICE constexpr ResultType operator()(Key const& key) const noexcept
     {
         return Fmix32(key, seed_);
@@ -37,6 +41,10 @@ struct MurmurHash3Fmix64 {
     using ResultType   = std::uint64_t;
 
     COLLECTION_HOST_DEVICE constexpr MurmurHash3Fmix64(std::uint64_t seed = 0) : seed_(seed) {}
+    COLLECTION_HOST_DEVICE constexpr bool operator==(MurmurHash3Fmix64 const& other) const noexcept
+    {
+        return seed_ == other.seed_;
+    }
     COLLECTION_HOST_DEVICE constexpr ResultType operator()(Key const& key) const noexcept
     {
         return Fmix64(key, seed_);
@@ -50,6 +58,10 @@ struct MurmurHash3_32 {
     using ArgumentType = Key;
     using ResultType   = std::uint32_t;
     COLLECTION_HOST_DEVICE constexpr MurmurHash3_32(std::uint32_t seed = 0) : seed_{seed} {}
+    COLLECTION_HOST_DEVICE constexpr bool operator==(MurmurHash3_32 const& other) const noexcept
+    {
+        return seed_ == other.seed_;
+    }
     COLLECTION_HOST_DEVICE constexpr ResultType operator()(Key const& key) const noexcept
     {
         return ComputeHash(reinterpret_cast<std::byte const*>(&key), sizeof(key));

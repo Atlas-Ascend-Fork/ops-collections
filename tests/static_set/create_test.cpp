@@ -12,7 +12,10 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
+
+#include "hash_functions.h"
 
 #include "tests/common/acl_env.h"
 #include "tests/common/device_buffer.h"
@@ -20,7 +23,23 @@
 #include "tests/common/dump_table.h"
 #include "tests/common/matchers.h"
 #include "tests/common/generators.h"
-#include "tests/common/test_print.h" 
+#include "tests/common/test_print.h"
+
+TEST_CASE("static_set rejects probing scheme with instance state", "[static_set][create]")
+{
+  aclco::test::AclGlobalGuard g_acl;
+
+  using Key = uint32_t;
+  constexpr Key emptyKey = 0;
+
+  REQUIRE_THROWS_AS(
+    (aclco::StaticSet<Key>(100, emptyKey, aclco::EqualTo<Key>{},
+      aclco::DoubleHashing<aclco::xxhash_32<Key>>{aclco::xxhash_32<Key>{0xA5A5A5A5u}})),
+    std::invalid_argument);
+
+  auto deflt = aclco::StaticSet<Key>(100, emptyKey);
+  REQUIRE(deflt.Capacity() >= 100);
+}
 
 TEMPLATE_TEST_CASE_SIG(
   "static_set create test",
