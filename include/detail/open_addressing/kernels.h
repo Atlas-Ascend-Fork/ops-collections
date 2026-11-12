@@ -517,6 +517,72 @@ __vector__ __global__ __aicore__ void ClearSIMD(__gm__ uint8_t *table, Key empty
   tableQueue.FreeTensor(tableLocal);
 }
 
+// 通用 32 位字视图清除核：以 32 位字为填充单位（Duplicate 仅支持到 32bit），
+// 更宽的槽位（如 16 字节 Pair）由 host 侧把 emptyValue 的原始字节展开为
+// 32 位字交错模式（pattern，最多 4 个字，patternLen = sizeof(ValueType) / 4）。
+// host 保证 patternLen 整除 BLOCK_SIZE，且核/tile 偏移均为 BLOCK_SIZE 字对齐，
+// 因此 tile 内相位与全局相位一致。tile 造好后由下方循环反复 DataCopy 复用，
+// 保持接近 memcpy 的写带宽。
+__vector__ __global__ __aicore__ void ClearSIMDU32(__gm__ uint8_t *table, __gm__ uint32_t *pattern, uint32_t patternLen,
+                                                   uint32_t commonCoreDataNum, uint32_t commonCoreAlignTileNum, uint32_t commonCoreTailDataNum,
+                                                   uint32_t remainCoreDataNum, uint32_t remainCoreAlignTileNum, uint32_t remainCoreTailDataNum,
+                                                   uint32_t tileDataNum, uint32_t remainBlockNum)
+{
+  using KeyType = uint32_t;
+
+  AscendC::TPipe pipe;
+  AscendC::TQue<AscendC::QuePosition::VECOUT, BUFFER_NUM> tableQueue;
+  AscendC::GlobalTensor<KeyType> tableGM;
+
+  uint32_t coreId = AscendC::GetBlockIdx();
+  uint32_t globalBufferIdx;
+
+  uint32_t coreDataNum;
+  uint32_t tileNum;
+  uint32_t tailDataNum;
+  uint32_t processDataNum;
+
+  if (coreId < remainBlockNum) {
+    coreDataNum = remainCoreDataNum;
+    tileNum = remainCoreAlignTileNum;
+    tailDataNum = remainCoreTailDataNum;
+    globalBufferIdx = remainCoreDataNum * coreId;
+  } else {
+    coreDataNum = commonCoreDataNum;
+    tileNum = commonCoreAlignTileNum;
+    tailDataNum = commonCoreTailDataNum;
+    globalBufferIdx = remainCoreDataNum * remainBlockNum + (coreId - remainBlockNum) * commonCoreDataNum;
+  }
+
+  tableGM.SetGlobalBuffer((__gm__ KeyType*)table + globalBufferIdx, coreDataNum);
+  pipe.InitBuffer(tableQueue, BUFFER_NUM, tileDataNum * sizeof(KeyType));
+
+  uint32_t loopCount = tileNum;
+  processDataNum = tileDataNum;
+  AscendC::LocalTensor<KeyType> tableLocal = tableQueue.AllocTensor<KeyType>();
+  // 先整体填 pattern[0]（PIPE_V），V_S 显式同步后再做标量补写（PIPE_S），
+  // S->MTE3 由队列 EnQue/DeQue 同步
+  KeyType fillValue = pattern[0];
+  AscendC::Duplicate<KeyType>(tableLocal, fillValue, processDataNum);
+  AscendC::SetFlag<AscendC::HardEvent::V_S>(EVENT_ID2);
+  AscendC::WaitFlag<AscendC::HardEvent::V_S>(EVENT_ID2);
+  for (uint32_t j = 1; j < patternLen; j++) {
+    KeyType value = pattern[j];
+    for (uint32_t i = j; i < tileDataNum; i += patternLen) {
+      tableLocal.SetValue(i, value);
+    }
+  }
+  tableQueue.EnQue(tableLocal);
+  tableLocal = tableQueue.DeQue<KeyType>();
+  for (uint32_t i = 0; i < loopCount; i++) {
+    if (i == tileNum - 1 && tailDataNum != 0) {
+      processDataNum = tailDataNum;
+    }
+    AscendC::DataCopy(tableGM[i * tileDataNum], tableLocal, processDataNum);
+  }
+  tableQueue.FreeTensor(tableLocal);
+}
+
 template <typename Key, typename Value, uint32_t BucketSize, typename ProbingScheme, typename KeyEqual, typename StencilT, typename Predicate>
 COLLECTION_AIV_GLOBAL void InsertIf(__gm__ uint8_t *table, __gm__ uint8_t *values,
                                                          __gm__ uint8_t *stencil, __gm__ uint8_t *emptyValue,

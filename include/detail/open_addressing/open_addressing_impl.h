@@ -322,17 +322,16 @@ class OpenAddressingImpl {
       (uint8_t*)callbackArgs);
   }
 
-  template <typename KeyType>
-  void ClearSimd(uint8_t *table, KeyType emptyValue, uint64_t tableCapacity, aclrtStream stream)
+  bool ClearSimd(uint8_t *table, uint64_t tableCapacity, aclrtStream stream)
   {
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
     uint64_t ubSize = 0;
     platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreMemSize(platform_ascendc::CoreMemType::UB, ubSize);
-    auto totalDataNum = tableCapacity;
+    // 统一以 32 位字为元素单位：Duplicate 仅支持到 32bit，更宽的槽位拆成 32 位字交错模式
     uint64_t tmp = ubSize / BLOCK_SIZE / BUFFER_NUM;
     uint32_t tileBlockNum = 1U;
     if (tmp > 0) {
-      uint64_t tb = tmp / sizeof(KeyType);
+      uint64_t tb = tmp / sizeof(uint32_t);
       tileBlockNum = (tb == 0) ? 1U : tb;
     }
 
@@ -341,62 +340,86 @@ class OpenAddressingImpl {
     if (tileDataNum == 0U) tileDataNum = BLOCK_SIZE;
 
     // 总 block 数（向上取整）
-    uint32_t totalBlockNum = (totalDataNum + BLOCK_SIZE - 1ULL) / BLOCK_SIZE;
+    uint32_t totalBlockNum = static_cast<uint32_t>((tableCapacity + BLOCK_SIZE - 1ULL) / BLOCK_SIZE);
 
     uint32_t actualCoreNum = static_cast<uint32_t>(aivCoreNum);
     if (actualCoreNum > totalBlockNum) actualCoreNum = totalBlockNum;
-    if (actualCoreNum == 0ULL) actualCoreNum = 1ULL; // 最少 1 core
+    if (actualCoreNum == 0U) actualCoreNum = 1U; // 最少 1 core
 
     uint32_t eachCoreBlockNum = totalBlockNum / actualCoreNum; // 每一个核分到的基本块数
-    uint32_t coresWithExtra = static_cast<uint32_t>(totalBlockNum % aivCoreNum); // 前 coresWithExtra 个核是 remain-core
-    
+    uint32_t coresWithExtra = totalBlockNum % actualCoreNum; // 前 coresWithExtra 个核是 remain-core
+
     // common-core 数量（元素）
-    uint32_t commonCoreDataNum = static_cast<uint32_t>(eachCoreBlockNum * BLOCK_SIZE);
-    uint32_t commonTileNum = static_cast<uint32_t>(eachCoreBlockNum / tileBlockNum);
+    uint32_t commonCoreDataNum = eachCoreBlockNum * BLOCK_SIZE;
+    uint32_t commonTileNum = eachCoreBlockNum / tileBlockNum;
     uint32_t commonRemainBlock = eachCoreBlockNum % tileBlockNum;
     uint32_t commonAlignTileNum = commonTileNum + (commonRemainBlock > 0 ? 1 : 0);
     uint32_t commonTailDataNum = (commonRemainBlock > 0) ? (commonRemainBlock * BLOCK_SIZE) : 0;
 
     // remain-core 数量（每个多一个block）
-    uint32_t earchRemainCoreBlockNum = eachCoreBlockNum + 1ULL;
-    uint32_t remainCoreDataNum = static_cast<uint32_t>(earchRemainCoreBlockNum * BLOCK_SIZE);
-    uint32_t remainTileNum = static_cast<uint32_t>(earchRemainCoreBlockNum / static_cast<uint32_t>(tileBlockNum));
+    uint32_t earchRemainCoreBlockNum = eachCoreBlockNum + 1U;
+    uint32_t remainCoreDataNum = earchRemainCoreBlockNum * BLOCK_SIZE;
+    uint32_t remainTileNum = earchRemainCoreBlockNum / tileBlockNum;
     uint32_t remainRemainBlock = earchRemainCoreBlockNum % tileBlockNum;
     uint32_t remainAlignTileNum = remainTileNum + (remainRemainBlock > 0 ? 1 : 0);
     uint32_t remainTailDataNum = (remainRemainBlock > 0) ? (remainRemainBlock * BLOCK_SIZE) : 0;
 
-    aclco::ClearSIMD<KeyType><<<aivCoreNum, 0, stream>>>(
+    // pattern 取自 device 侧 emptyValue 的原始字节，按 32 位字交错模式填充；
+    // 先化简为最小周期：全同时退化为纯 Duplicate（零标量补写），
+    // 周期越短 device 侧 SetValue 补写越少（一次性开销随周期减小）
+    uint32_t patternLen = static_cast<uint32_t>(sizeof(ValueType) / sizeof(uint32_t));
+    uint32_t pattern[sizeof(ValueType) / sizeof(uint32_t)];
+    {
+      const uint32_t *p32 = reinterpret_cast<const uint32_t *>(&emptyValue_);
+      for (uint32_t i = 0; i < patternLen; ++i) {
+        pattern[i] = p32[i];
+      }
+    }
+    for (uint32_t p = 1; p < patternLen; ++p) {
+      if (patternLen % p != 0) {
+        continue;
+      }
+      bool isPeriod = true;
+      for (uint32_t i = p; i < patternLen; ++i) {
+        if (pattern[i] != pattern[i % p]) {
+          isPeriod = false;
+          break;
+        }
+      }
+      if (isPeriod) {
+        patternLen = p;
+        break;
+      }
+    }
+
+    // 核/tile 偏移均为 BLOCK_SIZE 字对齐，patternLen 必须整除 BLOCK_SIZE
+    // 才能保证 tile 内相位与全局相位一致，否则回退逐元素路径
+    if (BLOCK_SIZE % patternLen != 0) {
+      return false;
+    }
+
+    aclco::ClearSIMDU32<<<aivCoreNum, 0, stream>>>(
       table,
-      emptyValue,
+      reinterpret_cast<uint32_t*>(emptyValueStorage_.Data()),
+      patternLen,
       commonCoreDataNum, commonAlignTileNum, commonTailDataNum,
       remainCoreDataNum, remainAlignTileNum, remainTailDataNum,
       tileDataNum, coresWithExtra);
+    return true;
   }
 
   bool CanClearSimd() const
   {
-    if constexpr (isPairV<ValueType>) {
-      return sizeof(ValueType) <= 8 && sizeof(emptyValue_.first) == sizeof(emptyValue_.second) &&
-             detail::Memcmp(&emptyValue_.first, &emptyValue_.second, sizeof(emptyValue_.first)) == 0;
-    } else {
-      return sizeof(ValueType) <= 8;
-    }
+    return sizeof(ValueType) <= 16 && sizeof(ValueType) % sizeof(uint32_t) == 0;
   }
 
   void Clear(aclrtStream stream)
   {
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
-    if (CanClearSimd() && storage_.Capacity() > aivCoreNum * BLOCK_SIZE * sizeof(ValueType)) {
-      if constexpr (isPairV<ValueType>) {
-        ClearSimd((uint8_t*)storage_.Data(), emptyValue_.first,
-                  storage_.Capacity() * sizeof(ValueType) / sizeof(typename ValueType::FirstType), stream);
-        uint32_t ret = aclrtSynchronizeStream(stream); 
-        CheckRet(ret, "StaticMap::Clear::aclrtSynchronizeStream");
-      } else {
-        ClearSimd((uint8_t*)storage_.Data(), emptyValue_, storage_.Capacity(), stream);
-        uint32_t ret = aclrtSynchronizeStream(stream); 
-        CheckRet(ret, "StaticSet::Clear::aclrtSynchronizeStream");
-      }
+    if (CanClearSimd() && storage_.Capacity() > aivCoreNum * BLOCK_SIZE * sizeof(ValueType) &&
+        ClearSimd((uint8_t*)storage_.Data(), storage_.Capacity() * sizeof(ValueType) / sizeof(uint32_t), stream)) {
+      uint32_t ret = aclrtSynchronizeStream(stream);
+      CheckRet(ret, "StaticMap::Clear::aclrtSynchronizeStream");
     } else {
       storage_.Initialize(emptyValueStorage_.Data(), stream);
     }
@@ -405,16 +428,11 @@ class OpenAddressingImpl {
   void ClearAsync(aclrtStream stream) noexcept
   {
     auto aivCoreNum = platform_ascendc::PlatformAscendCManager::GetInstance()->GetCoreNumAiv();
-     if (CanClearSimd() && storage_.Capacity() > aivCoreNum * BLOCK_SIZE * sizeof(ValueType)) {
-      if constexpr (isPairV<ValueType>) {
-        ClearSimd((uint8_t*)storage_.Data(), emptyValue_.first,
-                  storage_.Capacity() * sizeof(ValueType) / sizeof(typename ValueType::FirstType), stream);
-      } else {
-        ClearSimd((uint8_t*)storage_.Data(), emptyValue_, storage_.Capacity(), stream);
-      }
-    } else {
-      storage_.InitializeAsync(emptyValueStorage_.Data(), stream);
+    if (CanClearSimd() && storage_.Capacity() > aivCoreNum * BLOCK_SIZE * sizeof(ValueType) &&
+        ClearSimd((uint8_t*)storage_.Data(), storage_.Capacity() * sizeof(ValueType) / sizeof(uint32_t), stream)) {
+      return;
     }
+    storage_.InitializeAsync(emptyValueStorage_.Data(), stream);
   }
 
   SizeType Count(void *keys, Extent keyNum, aclrtStream stream)
