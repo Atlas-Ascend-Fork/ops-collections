@@ -46,6 +46,9 @@ stages:
         container:
           image: swr.cn-north-4.myhuaweicloud.com/ci_cann/ubuntu20.04.05_x86:k8s_v1.1006
       JOB_pre:
+        permissions:
+          repository: read
+          id-token: write
         name: Test_PreBuild
         uses: cann/.gitcode/.gitcode/workflows/pre_action.yml@master
     pre:
@@ -55,6 +58,9 @@ stages:
     name: CodeCheck
     jobs:
       JOB_codecheck_action:
+        permissions:
+          repository: read
+          id-token: write
         name: codecheck_action
         uses: .gitcode/workflows/codecheck_action.yml
         with:
