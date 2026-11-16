@@ -267,6 +267,7 @@ ops-collections是一个纯头文件库，无需编译即可使用。只需在�
 - **[DynamicMap API文档和使用示例](docs/DynamicMap_API文档和使用示例.md)** - 动态扩容、插入模式和使用示例
 - **[RoaringBitmap API文档和使用示例](docs/RoaringBitmap_API文档和使用示例.md)** - Roaring portable格式、查询接口、测试和性能入口
 - **[RoaringBitmap设计](docs/RoaringBitmap_design.md)** - 数据布局、解析校验、设备查询算法和测试矩阵
+- **[DynamicMap设计](docs/DynamicMap_design.md)** - 需求背景、8 接口清单、增长与写入设计、跨子表查询合并算法、验证矩阵
 - **[BloomFilter API文档和使用示例](docs/BloomFilter_API文档和使用示例.md)** - BloomFilter 接口、约束、流语义和运行方法
 - **[StaticMultiset API文档和使用示例](docs/static_multiset_API文档和使用示例.md)** - 多值集合接口、边界约束和测试入口
 - **[开发指导](docs/开发指导.md)** - 环境构建、开发指南、性能测试
