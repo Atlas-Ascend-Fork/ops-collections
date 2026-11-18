@@ -29,6 +29,19 @@ repos:
       - id: detect-private-key
       - id: check-json
 
+  # OAT 合规性检查 (Open Source Audit Tool)
+  - repo: local
+    hooks:
+      - id: oat-check
+        name: OAT Compliance Check
+        entry: bash scripts/oat_check.sh
+        language: system
+        exclude: ^build/|tests/third_party/
+        pass_filenames: true
+        types: [file]
+        stages: [commit]
+        verbose: true
+
   # -------------------------- Python 核心检查 --------------------------
   # Ruff：指定读取 pre-commit/pyproject.toml
   - repo: https://gitcode.com/gh_mirrors/ru/ruff-pre-commit
