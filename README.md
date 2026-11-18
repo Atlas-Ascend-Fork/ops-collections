@@ -173,6 +173,8 @@ bash scripts/build.sh -p
 bash scripts/build.sh -rp
 ```
 
+如需为某个容器新增性能测试样例，请参考[如何添加性能测试样例](tests/performance/HOW_TO_ADD_PERFORMANCE_TEST.md)，其中包含性能测试框架说明、添加步骤、完整示例与常见问题。
+
 ## 四、API介绍
 
 ### API概述
@@ -271,6 +273,7 @@ ops-collections是一个纯头文件库，无需编译即可使用。只需在�
 - **[BloomFilter API文档和使用示例](docs/BloomFilter_API文档和使用示例.md)** - BloomFilter 接口、约束、流语义和运行方法
 - **[StaticMultiset API文档和使用示例](docs/static_multiset_API文档和使用示例.md)** - 多值集合接口、边界约束和测试入口
 - **[开发指导](docs/开发指导.md)** - 环境构建、开发指南、性能测试
+- **[如何添加性能测试样例](tests/performance/HOW_TO_ADD_PERFORMANCE_TEST.md)** - 性能测试框架、添加步骤、完整示例与常见问题
 
 ## 七、参与贡献
 
