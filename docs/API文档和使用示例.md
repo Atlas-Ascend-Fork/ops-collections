@@ -126,8 +126,8 @@ MyStaticMap map(capacity, emptyKey, emptyValue, KeyEqual(), ProbingScheme(), acl
 
 // StaticSet 构造
 SetKey setEmptyKey = std::is_signed_v<SetKey> ? static_cast<SetKey>(-1) : std::numeric_limits<SetKey>::max();
-size_t capacity = 100000;
-MyStaticSet set(capacity, setEmptyKey, SetKeyEqual(), SetProbingScheme(), aclco::Storage<SetBucketSize>(), stream);
+size_t setCapacity = 100000;
+MyStaticSet set(setCapacity, setEmptyKey, SetKeyEqual(), SetProbingScheme(), aclco::Storage<SetBucketSize>(), stream);
 ```
 
 ---

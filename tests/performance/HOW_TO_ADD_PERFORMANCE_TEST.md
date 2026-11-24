@@ -1,6 +1,6 @@
 # 如何添加性能测试样例
 
-本文档详细说明如何在 `performance/static_map` 目录下添加新的性能测试样例。
+本文档详细说明如何在 `tests/performance/static_map` 目录下添加新的性能测试样例。
 
 ---
 
@@ -263,6 +263,7 @@ REGISTER_PERFORMANCE_ARGS(count_case_2, "count_uint64",
     int, double, int, std::string);
 
 }
+```
 
 ---
 
