@@ -247,8 +247,8 @@ flowchart TD
 
 下面三点是 DynamicMap 复用的**底层并发哈希核**针对昇腾硬件做的原子层优化（决定 Insert/InsertOrAssign 的吞吐上限）：
 
-1. **单原子最小化（PackCas）**：当 key 与 value 合计可放入单个 ≤8 字节的机器字时（如 `u16`/`u32` key + ≤4B value），把 `(key, value)` 打包进一个机器字，用**一次** `AtomicCAS` 同时完成"槽位归属仲裁 + value 写入"。开放寻址哈希每个 key 必须在目标槽上做一次原子仲裁，本路径把每 key 的原子操作压到理论下界 **1 次/key**。
-2. **>8 字节的依赖写（CasDependentWrite）**：当 key/value 超 8B（如 `u64` value）无法单原子打包时，采用 **1 次 `AtomicCAS` 占据 key 槽 + 1 次普通 store 写 value** 的"依赖写"，替代连续两次原子 CAS（`BackToBackCas`）。Find 侧以 `WaitForPayload` 等待 value 落盘后再读，既保证可见性、又把每 key 原子操作维持在 1 次。该优化是 `I64@160M` 由 41.28ms 降至 39.19ms 的关键。
+1. **单原子最小化（PackCas）**：当 key 与 value 合计可放入单个 ≤8 字节的机器字时（如 `u16`/`u32` key + ≤4B value），把 `(key, value)` 打包进一个机器字，用**一次** [`AtomicCasWrap`](../include/utility/atomic_cas_wrap.h) 调用同时完成"槽位归属仲裁 + value 写入"。开放寻址哈希每个 key 必须在目标槽上做一次原子仲裁，本路径把每 key 的原子操作压到理论下界 **1 次/key**。
+2. **>8 字节的依赖写（CasDependentWrite）**：当 key/value 超 8B（如 `u64` value）无法单原子打包时，采用 **1 次 `AtomicCasWrap` 调用占据 key 槽 + 1 次普通 store 写 value** 的"依赖写"，替代连续两次原子 CAS（`BackToBackCas`）。Find 侧以 `WaitForPayload` 等待 value 落盘后再读，既保证可见性、又把每 key 原子操作维持在 1 次。该优化是 `I64@160M` 由 41.28ms 降至 39.19ms 的关键。
 3. **异步批量插入（InsertAsync）**：8e7 规模按 `BatchSize=800k` 切批，各批在同一 `stream` 上 `InsertAsync` 连续下发、**批间不 Sync**，借助 device 流水重叠，仅在末批后一次同步取结果，消除逐批 host 往返带来的气泡。
 
 ### 3.2.6 类型相关的特殊情况与边界处理
