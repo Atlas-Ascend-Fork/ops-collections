@@ -210,7 +210,7 @@ COLLECTION_SIMT_DEVICE void AddIndependentPackedH8V1(__gm__ std::uint64_t* pairs
         std::uint32_t const upperHash = static_cast<std::uint32_t>(hash >> 32);
         std::uint32_t const lowerHash = static_cast<std::uint32_t>(hash);
         std::uint32_t const block = policy.BlockIndex(upperHash, numBlocks);
-        // Atlas 950 is little-endian. Packing adjacent U32 masks in low/high
+        // Ascend 950PR&950DT products are little-endian. Packing adjacent U32 masks in low/high
         // halves preserves the public eight-U32-word H8V1 storage layout while
         // reducing the number of GM atomics from eight to four per key.
         AddPackedPairs<0>(pairs, policy, block, lowerHash);

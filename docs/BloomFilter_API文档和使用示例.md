@@ -261,5 +261,5 @@ bash scripts/build.sh -p
 bash scripts/build.sh -rp
 ```
 
-构建前需设置与 Atlas 950 环境匹配的 `ASCEND_HOME_PATH`，并使用仓库指定的 CANN
+构建前需设置与 Ascend 950PR&950DT 系列产品环境匹配的 `ASCEND_HOME_PATH`，并使用仓库指定的 CANN
 版本以及 `ccec` 或毕昇 ASC 编译器。

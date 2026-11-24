@@ -48,7 +48,7 @@ ops-collections
 ## 二、环境构建
 
 ### 硬件要求
-Atlas 950系列产品及后续支持SIMT能力的昇腾系列产品
+Ascend 950PR&950DT系列产品及后续支持SIMT能力的昇腾系列产品
 
 ### 软件要求
 - CANN 9.0.0-beta.2及以上版本

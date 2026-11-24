@@ -1,6 +1,6 @@
 # StaticMultimap API 与使用示例
 
-`aclco::StaticMultimap<Key, Value>` 是固定容量的 Device 多值映射容器。每个键值对独立占槽，重复键和完全相同的键值对均保留。Key 和 Value 支持 `int32_t` 与 `int64_t`，面向支持 SIMT 的 Ascend 950，使用 C++17 和 CANN 编译器构建。
+`aclco::StaticMultimap<Key, Value>` 是固定容量的 Device 多值映射容器。每个键值对独立占槽，重复键和完全相同的键值对均保留。Key 和 Value 支持 `int32_t` 与 `int64_t`，面向支持 SIMT 的 Ascend 950PR&950DT 系列产品，使用 C++17 和 CANN 编译器构建。
 
 ## 生命周期与调用约定
 

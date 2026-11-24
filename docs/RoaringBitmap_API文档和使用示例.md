@@ -2,7 +2,7 @@
 
 ## 一、功能说明
 
-`aclco::RoaringBitmap` 是面向 Ascend 950 的只读压缩位图容器，参考 `cuco::experimental::roaring_bitmap` 实现。容器在 host 侧解析 Roaring portable serialization，将原始字节和查询元数据复制到 device，并通过 AIV SIMT kernel 批量判断 key 是否存在。
+`aclco::RoaringBitmap` 是面向 Ascend 950PR&950DT 系列产品的只读压缩位图容器，参考 `cuco::experimental::roaring_bitmap` 实现。容器在 host 侧解析 Roaring portable serialization，将原始字节和查询元数据复制到 device，并通过 AIV SIMT kernel 批量判断 key 是否存在。
 
 支持：
 

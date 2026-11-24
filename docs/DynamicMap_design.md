@@ -18,7 +18,7 @@
 2. 接口以 `void* 起始地址 + 元素个数(Extent)` 替代 `first/last` 迭代器，语义保持一致，返回成功个数 `SizeType`。
 3. 实现泛化功能，覆盖任意规模、`UNIQUE`/重复分布、各 `MatchingRate` 等合法输入场景。
 4. 精度与 `tests/static_map` 参考实现一致；性能满足任务书规定的达标要求：以任务书性能用例的参考时延为基线，`I32`/`I16` 达标系数不低于 0.7、`I64` 不低于 0.5。
-5. 适配硬件为 Atlas 950 系列产品。
+5. 适配硬件为 Ascend 950PR&950DT系列产品。
 
 #### 1.2.2 基线来源说明
 
@@ -96,7 +96,7 @@ flowchart TD
 | 类别 | 约束项 | 约束内容 |
 | --- | --- | --- |
 | 功能 | 接口集 | 构造/析构/Insert/Erase/Find/Contains/Reserve/InsertOrAssign 共 8 个 |
-| 适配硬件 | 产品 | Atlas 950 系列产品 |
+| 适配硬件 | 产品 | Ascend 950PR&950DT系列产品 |
 | dtype | key / value | `uint16`、`uint32`、`uint64`、`float32`（模板化） |
 | 大小约束 | key / value | 各 ≤ 8 字节（继承 StaticMap 约束） |
 | 增长 | 触发 | 活跃子表可用余量不足时追加 ×2 容量子表 |
@@ -270,7 +270,7 @@ flowchart TD
 
 | 支持的芯片版本 | 涉及勾选 |
 | --- | --- |
-| Atlas 950 系列产品 | √ |
+| Ascend 950PR&950DT系列产品 | √ |
 
 ### 3.4 算子约束限制
 

@@ -123,7 +123,7 @@ function resolve_cce_compiler() {
     "${ascend_home_path}/tools/ccec_compiler/bin"
     "${ascend_home_path}/toolkit/tools/ccec_compiler/bin"
   )
-  # Atlas 950 toolkits expose Bisheng through ccec_compiler/bin. Prefer that
+  # Ascend 950PR&950DT products expose Bisheng through ccec_compiler/bin. Prefer that
   # frontend when present, and keep ccec as the legacy CANN fallback.
   local compiler_names=(bisheng ccec)
 
