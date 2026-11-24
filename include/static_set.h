@@ -30,7 +30,7 @@ template <class Key,
           class ProbingScheme = aclco::DoubleHashing<aclco::xxhash_32<Key>>,
           class Storage = Storage<defaultSetBucketSize>>
 class StaticSet {
-  static_assert(sizeof(Key) <= 8, "Container dose not support key type size bigger than 8 bytes.");
+  static_assert(sizeof(Key) <= 8, "Container does not support key type size bigger than 8 bytes.");
 
   using ImplType = OpenAddressingImpl<Key,
                                       Key,

@@ -84,7 +84,7 @@ struct Extent<SizeType, dynamicExtent> {
  * 该工具函数在容器构造过程中被内部调用；而对于容器的引用构造，则需由用户自行使用此函数，以确定容器构造函数所需
  * 的容量参数。
  * 
- * @tparam ProingScheme 探测策略类型
+ * @tparam ProbingScheme 探测策略类型
  * @tparam Storage 存储策略类型
  * @tparam SizeType Extent 的值类型
  * @tparam N 容量大小
