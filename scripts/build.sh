@@ -585,6 +585,7 @@ function stage_doxygen_markdown() {
   cp "${ROOT_DIR}/docs/RoaringBitmap_API文档和使用示例.md" "${doxygen_markdown}/RoaringBitmap_API.md"
   cp "${ROOT_DIR}/docs/BloomFilter_API文档和使用示例.md" "${doxygen_markdown}/BloomFilter_API.md"
   cp "${ROOT_DIR}/docs/DynamicMap_API文档和使用示例.md" "${doxygen_markdown}/DynamicMap_API.md"
+  cp "${ROOT_DIR}/tests/performance/HOW_TO_ADD_PERFORMANCE_TEST.md" "${doxygen_markdown}/Performance_Guide.md"
   sed -e 's|API文档和使用示例\.md|API.md|g' -e 's|\.\./README\.md|index.html|g' \
     "${ROOT_DIR}/docs/开发指导.md" > "${doxygen_markdown}/Development_Guide.md"
   sed \
@@ -592,6 +593,7 @@ function stage_doxygen_markdown() {
     -e 's|docs/RoaringBitmap_API文档和使用示例\.md|RoaringBitmap_API.md|g' \
     -e 's|docs/BloomFilter_API文档和使用示例\.md|BloomFilter_API.md|g' \
     -e 's|docs/DynamicMap_API文档和使用示例\.md|DynamicMap_API.md|g' \
+    -e 's|tests/performance/HOW_TO_ADD_PERFORMANCE_TEST\.md|Performance_Guide.md|g' \
     -e 's|docs/开发指导\.md|Development_Guide.md|g' \
     -e 's|docs/images/architecture\.png|architecture.png|g' \
     "${ROOT_DIR}/README.md" | sed -E \
