@@ -1447,7 +1447,7 @@ std::cout << "Set capacity: " << setCapacity << std::endl;
 **函数签名：**
 
 ```cpp
-auto Data() const noexcept;
+ValueType* Data() const;
 ```
 
 **参数说明：**
